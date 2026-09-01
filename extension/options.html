@@ -16,11 +16,20 @@
     <label>Password <input id="password" type="password" autocomplete="current-password"></label>
   </section>
   <section>
+    <h2>Telegram (khi xong: tổng thời gian + link thanh toán)</h2>
+    <p class="hint">Không cần npm start. Bật checkbox → dán token BotFather → mở bot trên Telegram bấm Start, gửi hi → bấm Lấy Chat ID → Lưu → Gửi thử. Nếu Lấy Chat ID báo conflict thì tắt terminal đang npm start rồi bấm lại.</p>
+    <label class="check"><input id="tgEnabled" type="checkbox"> Bật gửi Telegram khi tới trang thẻ</label>
+    <label>Bot token <input id="tgToken" type="password" autocomplete="off" placeholder="123456:ABC..."></label>
+    <label>Chat ID <input id="tgChat" autocomplete="off" placeholder="bấm Lấy Chat ID, không phải tên bot"></label>
+  </section>
+  <section>
     <h2>applicant.json</h2>
     <textarea id="json" spellcheck="false"></textarea>
     <div class="row">
       <button id="save" class="primary">Lưu</button>
       <button id="restore">Khôi phục mặc định</button>
+      <button id="tgChatId" type="button">Lấy Chat ID</button>
+      <button id="tgTest" type="button">Gửi thử Telegram</button>
       <span id="msg"></span>
     </div>
   </section>

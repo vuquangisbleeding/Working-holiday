@@ -255,12 +255,12 @@
     ];
     const tick = (el) => {
       if (!el || el.type !== "checkbox" || el.disabled) return false;
+      if (el.checked) return true;
       try {
         el.click();
       } catch {
       }
       el.checked = true;
-      el.dispatchEvent(new Event("click", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
       if (!el.checked && el.id) {
         const label = document.querySelector('label[for="' + el.id + '"]');
@@ -277,7 +277,6 @@
       boxes.push(el);
     };
     suffixes.forEach((s) => document.querySelectorAll('input[type="checkbox"][id$="' + s + '"]').forEach(add));
-    document.querySelectorAll('input[type="checkbox"]').forEach(add);
     let checked = 0;
     for (const el of boxes) {
       if (!el.disabled && tick(el)) checked += 1;

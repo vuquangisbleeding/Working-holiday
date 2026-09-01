@@ -1,11 +1,14 @@
 import { spawn, type ChildProcess } from "child_process";
+import { config } from "dotenv";
 import express from "express";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { savedChatId, sendTelegramText } from "../telegram/bot.ts";
 import { DEFAULT_WHS, type Applicant } from "../types.ts";
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), "../../..");
+config({ path: path.join(ROOT, ".env") });
 const APPLICANT = path.join(ROOT, "applicant.json");
 const LOGS = path.join(ROOT, "logs");
 const LATEST_LOG = path.join(LOGS, "latest.log");
@@ -83,6 +86,16 @@ function readStatus(): Record<string, unknown> {
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
 app.use("/static", express.static(path.join(ROOT, "static"), { etag: false }));
 
 app.get("/", (_req, res) => {
@@ -128,6 +141,28 @@ app.post("/api/run", (_req, res) => {
     stdio: "inherit",
   });
   res.json({ ok: true, pid: botProc.pid });
+});
+
+app.get("/api/telegram", (_req, res) => {
+  res.json({
+    ok: true,
+    configured: Boolean(String(process.env.TELEGRAM_BOT_TOKEN || "").replace(/\s+/g, "")),
+    chatId: savedChatId() || null,
+  });
+});
+
+app.post("/api/telegram", async (req, res) => {
+  const body = isObject(req.body) ? req.body : {};
+  const text = String(body.text || "").trim();
+  const url = String(body.url || "").trim();
+  const timing = String(body.timing || "").trim();
+  const payload = text || ["NZ WHS xong", timing, url].filter(Boolean).join("\n");
+  if (!payload) {
+    res.status(400).json({ ok: false, error: "Thiếu nội dung Telegram" });
+    return;
+  }
+  const result = await sendTelegramText(payload);
+  res.status(result.ok ? 200 : 400).json(result);
 });
 
 app.post("/api/stop", (_req, res) => {

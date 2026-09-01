@@ -25,6 +25,123 @@
   function hasSuffix(...suffixes) {
     return suffixes.some((s) => document.querySelector('[id$="' + s + '"]'));
   }
+  function clickCooldownMs(op) {
+    if (op === "clickSubmit" || op === "clickLogin") return 4e3;
+    if (op === "clickApplyNow" || op === "clickEdit" || op === "clickPayNow") return 2500;
+    return 1500;
+  }
+  function lastClickAt() {
+    try {
+      const g = JSON.parse(sessionStorage.getItem(CLICK_GUARD_KEY) || "null");
+      return Number(g?.t || 0);
+    } catch {
+      return 0;
+    }
+  }
+  function wasAnyClickRecently(ms = 3e3) {
+    const t = lastClickAt();
+    return !!t && Date.now() - t < ms;
+  }
+  function wasClickedRecently(op) {
+    try {
+      const g = JSON.parse(sessionStorage.getItem(CLICK_GUARD_KEY) || "null");
+      if (!g || g.op !== op || g.url !== location.href) return false;
+      return Date.now() - Number(g.t || 0) < clickCooldownMs(op);
+    } catch {
+      return false;
+    }
+  }
+  function markClicked(op) {
+    sessionStorage.setItem(CLICK_GUARD_KEY, JSON.stringify({ op, url: location.href, t: Date.now() }));
+  }
+  function formatClock(ms) {
+    if (!Number.isFinite(ms) || ms < 0) return "0.00s";
+    if (ms < 6e4) return (ms / 1e3).toFixed(2) + "s";
+    const minutes = Math.floor(ms / 6e4);
+    const seconds = ms % 6e4 / 1e3;
+    return minutes + "m " + seconds.toFixed(2).padStart(5, "0") + "s";
+  }
+  function beginCaptchaWait() {
+    if (!sessionStorage.getItem(CAPTCHA_WAIT_KEY)) sessionStorage.setItem(CAPTCHA_WAIT_KEY, String(Date.now()));
+  }
+  function endCaptchaWait() {
+    const start = Number(sessionStorage.getItem(CAPTCHA_WAIT_KEY) || "0");
+    sessionStorage.removeItem(CAPTCHA_WAIT_KEY);
+    if (!start) return 0;
+    const ms = Math.max(0, Date.now() - start);
+    if (ms >= 100) {
+      sessionStorage.setItem(CAPTCHA_TOTAL_KEY, String(Number(sessionStorage.getItem(CAPTCHA_TOTAL_KEY) || "0") + ms));
+      sessionStorage.setItem(CAPTCHA_COUNT_KEY, String(Number(sessionStorage.getItem(CAPTCHA_COUNT_KEY) || "0") + 1));
+    }
+    persistTiming();
+    return ms;
+  }
+  function captchaLiveMs() {
+    const total = Number(sessionStorage.getItem(CAPTCHA_TOTAL_KEY) || "0");
+    const start = Number(sessionStorage.getItem(CAPTCHA_WAIT_KEY) || "0");
+    const t0 = Number(sessionStorage.getItem(T0_KEY) || "0");
+    const live = start && start >= t0 ? Math.max(0, Date.now() - start) : 0;
+    return total + live;
+  }
+  function captchaLiveCount() {
+    const n = Number(sessionStorage.getItem(CAPTCHA_COUNT_KEY) || "0");
+    const start = Number(sessionStorage.getItem(CAPTCHA_WAIT_KEY) || "0");
+    const t0 = Number(sessionStorage.getItem(T0_KEY) || "0");
+    return n + (start && start >= t0 ? 1 : 0);
+  }
+  function timingSummary() {
+    const t0 = Number(sessionStorage.getItem(T0_KEY) || Date.now());
+    const total = Math.max(0, Date.now() - t0);
+    const captcha = Math.min(total, captchaLiveMs());
+    const bot = Math.max(0, total - captcha);
+    return formatTimingLine(total, bot, captcha, captchaLiveCount());
+  }
+  function formatTimingLine(totalMs, botMs, captchaMs, count) {
+    return "T\u1ED5ng " + formatClock(totalMs) + " (bot " + formatClock(botMs) + " + captcha " + formatClock(captchaMs) + ", " + count + " l\u1EA7n)";
+  }
+  function persistTiming() {
+    if (typeof chrome === "undefined" || !chrome.storage?.local) return;
+    const t0 = Number(sessionStorage.getItem(T0_KEY) || "0");
+    if (!t0) return;
+    const payload = {
+      whsT0: t0,
+      whsCaptchaTotal: Number(sessionStorage.getItem(CAPTCHA_TOTAL_KEY) || "0"),
+      whsCaptchaCount: Number(sessionStorage.getItem(CAPTCHA_COUNT_KEY) || "0"),
+      whsCaptchaWait: Number(sessionStorage.getItem(CAPTCHA_WAIT_KEY) || "0"),
+      whsRunActive: sessionStorage.getItem(RUN_KEY) === "1"
+    };
+    void chrome.storage.local.get(["whsT0"], (cur) => {
+      if (Number(cur.whsT0 || 0) > t0) return;
+      void chrome.storage.local.set(payload);
+    });
+  }
+  function timingFromPersisted(data) {
+    const t0 = Number(data.whsT0 || Date.now());
+    const total = Math.max(0, Date.now() - t0);
+    const waitStart = Number(data.whsCaptchaWait || 0);
+    const live = waitStart && waitStart >= t0 ? Math.max(0, Date.now() - waitStart) : 0;
+    const captcha = Math.min(total, Number(data.whsCaptchaTotal || 0) + live);
+    const count = Number(data.whsCaptchaCount || 0) + (live ? 1 : 0);
+    return formatTimingLine(total, Math.max(0, total - captcha), captcha, count);
+  }
+  function resetTiming() {
+    sessionStorage.setItem(T0_KEY, String(Date.now()));
+    sessionStorage.setItem(CAPTCHA_TOTAL_KEY, "0");
+    sessionStorage.setItem(CAPTCHA_COUNT_KEY, "0");
+    sessionStorage.removeItem(CAPTCHA_WAIT_KEY);
+    persistTiming();
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      void chrome.storage.local.set({
+        whsPayLogged: false,
+        whsRunActive: true,
+        whsTelegramSent: false,
+        whsCaptchaTotal: 0,
+        whsCaptchaCount: 0,
+        whsCaptchaWait: 0,
+        whsT0: Number(sessionStorage.getItem(T0_KEY) || Date.now())
+      });
+    }
+  }
   function setStatus(text, cls = "") {
     const el = panel?.querySelector(".whs-status");
     if (!el) return;
@@ -39,7 +156,7 @@
     const action = activity.action ? " | " + activity.action : "";
     return page + action;
   }
-  var RUN_KEY, LOG_KEY, T0_KEY, LAST_PAGE_KEY, MAX_PAGES, panel, sleep, activity;
+  var RUN_KEY, LOG_KEY, T0_KEY, LAST_PAGE_KEY, MAX_PAGES, CLICK_GUARD_KEY, HL_LAST_AT_KEY, CAPTCHA_TOTAL_KEY, CAPTCHA_COUNT_KEY, CAPTCHA_WAIT_KEY, panel, sleep, activity;
   var init_state = __esm({
     "extension/src/content/state.ts"() {
       "use strict";
@@ -48,6 +165,11 @@
       T0_KEY = "whsRunT0";
       LAST_PAGE_KEY = "whsLastPage";
       MAX_PAGES = 40;
+      CLICK_GUARD_KEY = "whsClickGuard";
+      HL_LAST_AT_KEY = "whsHlLastAt";
+      CAPTCHA_TOTAL_KEY = "whsCaptchaTotalMs";
+      CAPTCHA_COUNT_KEY = "whsCaptchaCount";
+      CAPTCHA_WAIT_KEY = "whsCaptchaWaitStart";
       sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       activity = { page: "", action: "" };
     }
@@ -78,6 +200,29 @@
     if (!box) return;
     box.textContent = loadLog().map(logLine).join("\n") || "Ch\u01B0a c\xF3 log. B\u1EA5m Ch\u1EA1y.";
     box.scrollTop = box.scrollHeight;
+    renderClock();
+  }
+  function renderClock() {
+    const el = panel?.querySelector(".whs-clock");
+    if (!el) return;
+    if (!sessionStorage.getItem(T0_KEY)) {
+      el.textContent = "";
+      return;
+    }
+    el.textContent = timingSummary();
+    persistTiming();
+  }
+  function startClock() {
+    renderClock();
+    if (clockTimer) return;
+    clockTimer = window.setInterval(renderClock, 250);
+  }
+  function stopClock() {
+    if (clockTimer) {
+      clearInterval(clockTimer);
+      clockTimer = void 0;
+    }
+    renderClock();
   }
   function addLog(kind, text, durMs) {
     const t0 = Number(sessionStorage.getItem(T0_KEY) || Date.now());
@@ -97,13 +242,15 @@
     setStatus(kind + ": " + entry.text + (entry.dur ? " (" + entry.dur + ")" : ""), cls);
   }
   function resetLog() {
-    sessionStorage.setItem(T0_KEY, String(Date.now()));
+    resetTiming();
     sessionStorage.setItem(LOG_KEY, "[]");
     sessionStorage.removeItem(LAST_PAGE_KEY);
     renderLog();
   }
   function copyLog() {
-    const text = loadLog().map(logLine).join("\n");
+    const lines = loadLog().map(logLine);
+    if (sessionStorage.getItem(T0_KEY)) lines.push(timingSummary());
+    const text = lines.join("\n");
     if (!text) return;
     navigator.clipboard.writeText(text).then(
       () => setStatus("\u0110\xE3 copy log.", "ok"),
@@ -139,6 +286,7 @@
       stop();
     }
   }
+  var clockTimer;
   var init_log = __esm({
     "extension/src/content/log.ts"() {
       "use strict";
@@ -231,12 +379,18 @@
   var detect_exports = {};
   __export(detect_exports, {
     detectPage: () => detectPage,
+    findPaymentUrl: () => findPaymentUrl,
     isAccessDenied: () => isAccessDenied,
     isHighLoad: () => isHighLoad,
+    isHostedPayUrl: () => isHostedPayUrl,
+    isPaystationHost: () => isPaystationHost,
     isQuotaClosed: () => isQuotaClosed,
     recoverHighLoad: () => recoverHighLoad,
     startHighLoadWatch: () => startHighLoadWatch
   });
+  function pagePath() {
+    return location.pathname.toLowerCase();
+  }
   function pageBlob() {
     const parts = [document.title || ""];
     const body = document.body;
@@ -263,6 +417,16 @@
     return leftover.length < 160;
   }
   function isHighLoad() {
+    if (hasSuffix(
+      "familyNameTextBox",
+      "passportNumberTextBox",
+      "imprisonment5YearsDropDownList",
+      "previousWhsPermitVisaDropDownList",
+      "falseStatementCheckBox",
+      "payerNameTextBox"
+    )) {
+      return false;
+    }
     const text = pageBlob();
     return text.includes("site is under high load") || text.includes("high demand on the system") || text.includes("experiencing high demand") || text.includes("high load") && text.includes("try again later") || isTryAgainLater();
   }
@@ -309,29 +473,49 @@
     }
     return !!document.querySelector("iframe[src*='paystation'], iframe[src*='paymark'], iframe[src*='paymentexpress']");
   }
+  function findPaymentUrl() {
+    const href = location.href;
+    if (/payments\.paystation\.co\.nz\/hosted/i.test(href)) return href;
+    const frames = Array.from(document.querySelectorAll("iframe"));
+    for (const f of frames) {
+      const src = f.src || f.getAttribute("src") || "";
+      if (/paystation\.co\.nz\/hosted/i.test(src)) return src;
+    }
+    const links = Array.from(document.querySelectorAll("a[href]"));
+    for (const a of links) {
+      if (/paystation\.co\.nz\/hosted/i.test(a.href)) return a.href;
+    }
+    return href;
+  }
+  function isPaystationHost() {
+    return /paystation\.co\.nz/i.test(location.hostname);
+  }
+  function isHostedPayUrl(url) {
+    return /payments\.paystation\.co\.nz\/hosted/i.test(url);
+  }
   function detectPage() {
     const url = location.href;
+    const path = pagePath();
     const body = document.body && document.body.innerText || "";
+    if (isCaptchaUrl()) return "captcha";
     if (isHighLoad()) return "highload";
     if (isAccessDenied()) return "denied";
     if (isQuotaClosed()) return "quota";
-    if (url.includes("Personal1.aspx") || hasSuffix("familyNameTextBox")) return "personal1";
-    if (url.includes("Personal2.aspx") || hasSuffix("passportNumberTextBox")) return "personal2";
-    if (url.includes("Personal3.aspx")) return "personal3";
-    if (url.includes("Medical1.aspx") || hasSuffix("renalDialysisDropDownList")) return "health";
-    if (url.includes("Character.aspx") || hasSuffix("imprisonment5YearsDropDownList")) return "character";
-    if (url.includes("WorkingHolidaySpecific.aspx") || hasSuffix("previousWhsPermitVisaDropDownList")) return "whs";
+    if (path.includes("personal1.aspx") || hasSuffix("familyNameTextBox")) return "personal1";
+    if (path.includes("personal2.aspx") || hasSuffix("passportNumberTextBox")) return "personal2";
+    if (path.includes("personal3.aspx")) return "personal3";
+    if (path.includes("medical1.aspx") || hasSuffix("renalDialysisDropDownList")) return "health";
+    if (path.includes("character.aspx") || hasSuffix("imprisonment5YearsDropDownList")) return "character";
+    if (path.includes("workingholidayspecific.aspx") || hasSuffix("previousWhsPermitVisaDropDownList")) return "whs";
     if (isCardGateway() && !hasPayerNameField()) return "pay_card";
     if (hasPayerNameField()) return "payer";
     if (hasPaymentGatewayLink() || buttonTextHit(["NEXT STEP"]) || buttonTextHit(["SECURE PAYMENT"])) return "pay_next";
     if (url.toLowerCase().includes("submit.aspx") && url.toLowerCase().includes("token=") || /PAY NOW/i.test(body) && /SUBMIT RECEIVED/i.test(body) || buttonTextHit(["PAY NOW"]) && buttonTextHit(["PAY LATER"])) {
       return "pay_now";
     }
-    if (url.includes("Submit.aspx") || hasSuffix("falseStatementCheckBox")) return "declaration";
-    if (isCaptchaUrl() && !recaptchaSolved() || isChallengeCaptcha() && !hasSuffix("familyNameTextBox")) {
-      return "captcha";
-    }
-    if (url.includes("OnlinePayment.aspx") || url.includes("OnLinePayment.aspx")) return "pay_next";
+    if (path.includes("submit.aspx") || hasSuffix("falseStatementCheckBox")) return "declaration";
+    if (isChallengeCaptcha() && !hasSuffix("familyNameTextBox")) return "captcha";
+    if (path.includes("onlinepayment.aspx")) return "pay_next";
     if (document.querySelector('[name="username"]') && document.querySelector('[name="password"]')) return "login";
     if (document.querySelector("a[id^='ContentPlaceHolder1_applicationList_applicationsDataGrid_editHyperLink_']")) {
       return "existing";
@@ -340,10 +524,17 @@
     if (document.querySelector("[id^='ContentPlaceHolder1_countryRepeater_countryName_']")) return "country";
     return "unknown";
   }
+  function pageLooksEmpty() {
+    if (document.readyState === "loading") return true;
+    const compact = pageBlob().replace(/\s+/g, " ").trim();
+    return compact.length < 8;
+  }
   async function recoverHighLoad(stopRun2) {
     if (!isHighLoad()) {
-      sessionStorage.removeItem("whsHighLoadTries");
-      sessionStorage.removeItem(HL_RELOAD_KEY);
+      if (!pageLooksEmpty()) {
+        sessionStorage.removeItem("whsHighLoadTries");
+        sessionStorage.removeItem(HL_RELOAD_KEY);
+      }
       return false;
     }
     if (isQuotaClosed()) {
@@ -351,19 +542,20 @@
       stopRun2();
       return true;
     }
+    if (wasAnyClickRecently(3e3)) return false;
     if (sessionStorage.getItem(HL_RELOAD_KEY) === "1") return true;
     const n = Number(sessionStorage.getItem("whsHighLoadTries") || "0") + 1;
     sessionStorage.setItem("whsHighLoadTries", String(n));
     sessionStorage.setItem(HL_RELOAD_KEY, "1");
     const kind = isTryAgainLater() ? "TRY_AGAIN" : "HIGH_LOAD";
-    if (n > 1) {
-      const inApp = /applicationid=/i.test(location.href);
-      const wait = inApp ? Math.min(400 * n, 3e3) : Math.min(800 * n, 5e3);
-      addLog(kind, "F5 sau " + (wait / 1e3).toFixed(1) + "s (l\u1EA7n " + n + ")");
-      await sleep(wait);
-    } else {
-      addLog(kind, isTryAgainLater() ? "Please try again later \u2014 F5 ngay" : "F5 ngay");
-    }
+    const lastAt = Number(sessionStorage.getItem(HL_LAST_AT_KEY) || "0");
+    const since = Date.now() - lastAt;
+    const inApp = /applicationid=/i.test(location.href);
+    const backoff = n === 1 ? isTryAgainLater() ? 800 : 400 : inApp ? Math.min(400 * n, 3e3) : Math.min(800 * n, 5e3);
+    const wait = Math.max(backoff, lastAt ? Math.max(0, HL_MIN_GAP_MS - since) : backoff);
+    addLog(kind, "F5 sau " + (wait / 1e3).toFixed(1) + "s (l\u1EA7n " + n + ")");
+    if (wait > 0) await sleep(wait);
+    sessionStorage.setItem(HL_LAST_AT_KEY, String(Date.now()));
     try {
       location.reload();
     } catch {
@@ -373,16 +565,17 @@
   }
   function startHighLoadWatch(stopRun2) {
     if (highLoadWatch) return;
+    sessionStorage.removeItem(HL_RELOAD_KEY);
     highLoadWatch = window.setInterval(() => {
       if (sessionStorage.getItem(RUN_KEY) !== "1") return;
       if (!isHighLoad()) {
-        sessionStorage.removeItem(HL_RELOAD_KEY);
+        if (!pageLooksEmpty()) sessionStorage.removeItem(HL_RELOAD_KEY);
         return;
       }
       void recoverHighLoad(stopRun2);
     }, 300);
   }
-  var HL_RELOAD_KEY, highLoadWatch;
+  var HL_RELOAD_KEY, HL_MIN_GAP_MS, highLoadWatch;
   var init_detect = __esm({
     "extension/src/content/detect.ts"() {
       "use strict";
@@ -390,6 +583,7 @@
       init_captcha();
       init_state();
       HL_RELOAD_KEY = "whsHlReloading";
+      HL_MIN_GAP_MS = 1500;
     }
   });
 
@@ -456,6 +650,11 @@
   }
   async function tickYesNow() {
     if (!hasSuffix("falseStatementCheckBox")) return null;
+    const unchecked = Array.from(document.querySelectorAll('input[type="checkbox"]')).some((el) => {
+      const box = el;
+      return box.type === "checkbox" && !box.disabled && !box.checked && /CheckBox$/i.test(box.id || "");
+    });
+    if (!unchecked) return { skipped: true, checked: 1 };
     try {
       return await callBridge("tickDeclaration");
     } catch {
@@ -484,14 +683,10 @@
     if (await pageLeft(beforeUrl)) return { ok: true, clicked: "NAV" };
     try {
       const r = await callBridge("clickAfterCaptcha", { preferSubmit });
-      if (r?.ok) return r;
-    } catch {
-    }
-    await sleep(200);
-    if (await pageLeft(beforeUrl)) return { ok: true, clicked: "NAV" };
-    try {
-      const again = await callBridge("clickAfterCaptcha", { preferSubmit });
-      if (again?.ok) return again;
+      if (r?.ok) {
+        markClicked(preferSubmit ? "clickSubmit" : "clickNext");
+        return r;
+      }
     } catch {
     }
     return null;
@@ -505,12 +700,7 @@
         stop();
         resolve();
       };
-      let lastTick = 0;
       const onTick = () => {
-        if (Date.now() - lastTick > 400) {
-          lastTick = Date.now();
-          void tickYesNow();
-        }
         if (sessionStorage.getItem(RUN_KEY) !== "1" || recaptchaSolved() || !captchaBlocking(includeSubmitWidget)) {
           finish();
         }
@@ -533,38 +723,54 @@
   async function waitCaptcha(includeSubmitWidget = false, clickWhenSolved = true) {
     if (!captchaBlocking(includeSubmitWidget)) return false;
     dumpCaptchaInfo();
-    const started = Date.now();
+    beginCaptchaWait();
     const beforeUrl = location.href;
     addLog("CAPTCHA", includeSubmitWidget ? "Ch\u1EDD reCAPTCHA tr\u01B0\u1EDBc SUBMIT" : "Ch\u1EDD captcha (\u0111\xE3 tick Yes n\u1EBFu c\xF3)");
-    await withStuck(
-      includeSubmitWidget ? "ch\u1EDD reCAPTCHA SUBMIT" : "ch\u1EDD captcha",
-      () => waitUntilSolvedOrUnblocked(includeSubmitWidget)
-    );
-    if (sessionStorage.getItem(RUN_KEY) !== "1") return false;
-    if (!clickWhenSolved) {
-      addLog("CAPTCHA", "Xong captcha", Date.now() - started);
-      return false;
+    try {
+      await withStuck(
+        includeSubmitWidget ? "ch\u1EDD reCAPTCHA SUBMIT" : "ch\u1EDD captcha",
+        () => waitUntilSolvedOrUnblocked(includeSubmitWidget)
+      );
+      const waited = endCaptchaWait();
+      if (waited >= 100) addLog("CAPTCHA", "Xong captcha", waited);
+      if (sessionStorage.getItem(RUN_KEY) !== "1") return false;
+      if (!clickWhenSolved) return false;
+      const advanced = await clickAdvanceAfterCaptcha(includeSubmitWidget, beforeUrl);
+      if (advanced?.ok && advanced.clicked !== "NAV") {
+        const label = String(advanced.clicked || "NEXT");
+        const id = advanced.id ? " #" + String(advanced.id).split("_").pop() : "";
+        addLog("CLICK", "Captcha xong \u2014 b\u1EA5m " + label + id + " ngay");
+      }
+      return !!advanced?.ok;
+    } finally {
+      endCaptchaWait();
     }
-    const advanced = await clickAdvanceAfterCaptcha(includeSubmitWidget, beforeUrl);
-    if (advanced?.ok && advanced.clicked !== "NAV") {
-      const label = String(advanced.clicked || "NEXT");
-      const id = advanced.id ? " #" + String(advanced.id).split("_").pop() : "";
-      addLog("CLICK", "Captcha xong \u2014 b\u1EA5m " + label + id + " ngay");
-    }
-    addLog("CAPTCHA", "Xong captcha", Date.now() - started);
-    return !!advanced?.ok;
   }
   async function waitNav(beforeUrl, timeout = 2e4) {
-    const { isAccessDenied: isAccessDenied2, isHighLoad: isHighLoad2 } = await Promise.resolve().then(() => (init_detect(), detect_exports));
-    return withStuck("ch\u1EDD chuy\u1EC3n trang " + beforeUrl, async () => {
-      const start = Date.now();
-      while (Date.now() - start < timeout) {
-        if (sessionStorage.getItem(RUN_KEY) !== "1") return false;
-        if (location.href !== beforeUrl || isChallengeCaptcha() || isHighLoad2() || isAccessDenied2()) return true;
-        await sleep(80);
-      }
-      return location.href !== beforeUrl;
-    });
+    const { isAccessDenied: isAccessDenied2, isHighLoad: isHighLoad2, findPaymentUrl: findPaymentUrl2, isHostedPayUrl: isHostedPayUrl2 } = await Promise.resolve().then(() => (init_detect(), detect_exports));
+    let unloading = false;
+    const onGone = () => {
+      unloading = true;
+    };
+    window.addEventListener("pagehide", onGone);
+    window.addEventListener("beforeunload", onGone);
+    try {
+      return await withStuck("ch\u1EDD chuy\u1EC3n trang " + beforeUrl, async () => {
+        const start = Date.now();
+        while (Date.now() - start < timeout) {
+          if (sessionStorage.getItem(RUN_KEY) !== "1") return false;
+          const pay = findPaymentUrl2();
+          if (location.href !== beforeUrl || unloading || isChallengeCaptcha() || isHighLoad2() || isAccessDenied2() || pay !== beforeUrl && isHostedPayUrl2(pay) || !!document.querySelector("iframe[src*='paystation']")) {
+            return true;
+          }
+          await sleep(80);
+        }
+        return location.href !== beforeUrl || unloading;
+      });
+    } finally {
+      window.removeEventListener("pagehide", onGone);
+      window.removeEventListener("beforeunload", onGone);
+    }
   }
   var TOKEN_MIN, POLL_MS;
   var init_captcha = __esm({
@@ -575,6 +781,9 @@
       init_state();
       TOKEN_MIN = 20;
       POLL_MS = 50;
+      window.addEventListener("pagehide", () => {
+        endCaptchaWait();
+      });
     }
   });
 
@@ -850,16 +1059,19 @@
     return clicked + (value ? ' "' + value + '"' : "") + (id ? " #" + id : "");
   }
   async function clickSubmitFallback() {
-    addLog("CLICK", "Kh\xF4ng c\xF3 Next/SAVE tr\xEAn " + shortUrl(location.href) + " \u2014 b\u1EA5m SUBMIT");
+    addLog("CLICK", "Kh\xF4ng c\xF3 Next tr\xEAn " + shortUrl(location.href) + " \u2014 b\u1EA5m SUBMIT");
     setActivity(shortUrl(location.href), "b\u1EA5m SUBMIT");
     await tickYesNow();
     const clicked = await waitCaptcha(true);
     if (clicked) return { ok: true, clicked: "SUBMIT" };
+    if (wasClickedRecently("clickSubmit")) return { ok: true, skipped: true };
     const sub = await callBridge("clickSubmit");
-    if (sub?.ok) addLog("CLICK", "\u0110\xE3 b\u1EA5m " + clickLabel(sub, "SUBMIT") + " tr\xEAn " + shortUrl(location.href));
+    if (sub?.ok) markClicked("clickSubmit");
     return sub;
   }
   async function advanceWithoutNext(before) {
+    const canSubmit = await callBridge("hasSubmit");
+    if (canSubmit?.ok) return clickSubmitFallback();
     addLog("CLICK", "Kh\xF4ng c\xF3 Next tr\xEAn " + shortUrl(before) + " \u2014 t\xECm SAVE");
     const save = await callBridge("clickSave");
     if (!save?.ok) return clickSubmitFallback();
@@ -890,6 +1102,12 @@
     const started = Date.now();
     const label = op.replace(/^click/i, "").toUpperCase();
     setActivity(shortUrl(before), "b\u1EA5m " + label);
+    if (wasClickedRecently(op)) {
+      addLog("CLICK", "Ch\u1EDD trang sau " + label + " (\u0111\xE3 b\u1EA5m tr\xEAn " + shortUrl(before) + ")");
+      await waitNav(before);
+      finishPendingNav();
+      return { ok: true, skipped: true };
+    }
     addLog("CLICK", "T\xECm " + label + " tr\xEAn " + shortUrl(before));
     sessionStorage.setItem(
       "whsPendingNav",
@@ -898,6 +1116,7 @@
     let r = await withStuck("b\u1EA5m " + label + " | " + shortUrl(before), () => callBridge(op, payload));
     if (op === "clickNext" && (!r || !r.ok)) r = await advanceWithoutNext(before);
     if (r?.clicked === "SAVE" && location.href === before) {
+      markClicked(op);
       finishPendingNav();
       return r;
     }
@@ -906,16 +1125,58 @@
       addLog("ERR", "Kh\xF4ng b\u1EA5m \u0111\u01B0\u1EE3c " + label + " tr\xEAn " + shortUrl(location.href), Date.now() - started);
       return r;
     }
+    markClicked(op);
     addLog("CLICK", "\u0110\xE3 b\u1EA5m " + clickLabel(r, label) + " tr\xEAn " + shortUrl(before));
     const clickAgain = op !== "clickSubmit" && op !== "clickPayNow" && op !== "clickPayLater" && op !== "clickOk";
     await waitCaptcha(false, clickAgain);
-    await waitNav(before);
+    const navTimeout = op === "clickOk" || op === "clickPayNow" || op === "clickNextStep" ? 45e3 : 2e4;
+    await waitNav(before, navTimeout);
     finishPendingNav();
     return r;
   }
 
   // extension/src/content.ts
   init_state();
+
+  // src/telegram/identity.ts
+  function applicantIdentityLines(data) {
+    const p = data?.personal;
+    const name = [p?.family_name, p?.given_name_1, p?.given_name_2, p?.given_name_3].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
+    const email = String(data?.contact?.email || "").trim();
+    return [name ? "H\u1ECD t\xEAn: " + name : "", email ? "Email: " + email : ""].filter(Boolean);
+  }
+
+  // extension/src/content/telegram.ts
+  init_log();
+  async function notifyTelegram(payUrl, timing) {
+    try {
+      const stored = await chrome.storage.local.get(["telegram", "whsTelegramSent", "applicant"]);
+      const tg = stored.telegram;
+      if (stored.whsTelegramSent) return;
+      if (!tg?.enabled) return;
+      if (!tg.botToken || !tg.chatId) {
+        addLog("TELEGRAM", "Thi\u1EBFu bot token ho\u1EB7c Chat ID trong Options");
+        return;
+      }
+      const text = [
+        "NZ WHS xong",
+        ...applicantIdentityLines(stored.applicant),
+        timing,
+        payUrl || "(ch\u01B0a c\xF3 link Paystation)"
+      ].filter(Boolean).join("\n");
+      const result = await chrome.runtime.sendMessage({ type: "TELEGRAM", text });
+      if (result?.ok) {
+        await chrome.storage.local.set({ whsTelegramSent: true });
+        addLog("TELEGRAM", "\u0110\xE3 g\u1EEDi Telegram");
+        return;
+      }
+      addLog("TELEGRAM", "Kh\xF4ng g\u1EEDi \u0111\u01B0\u1EE3c: " + (result?.error || "kh\xF4ng r\xF5"));
+    } catch (err) {
+      addLog("TELEGRAM", String(err instanceof Error ? err.message : err));
+    }
+  }
+
+  // extension/src/content.ts
   var running = false;
   function setButtons(isRunning) {
     if (!panel) return;
@@ -926,11 +1187,69 @@
   }
   function stopRun() {
     if (sessionStorage.getItem(RUN_KEY) === "1" && sessionStorage.getItem(T0_KEY)) {
-      addLog("SUMMARY", "T\u1ED5ng t\u1EEB l\xFAc Ch\u1EA1y: " + ((Date.now() - Number(sessionStorage.getItem(T0_KEY))) / 1e3).toFixed(2) + "s");
+      persistTiming();
+      addLog("SUMMARY", timingSummary());
     }
     sessionStorage.removeItem(RUN_KEY);
     running = false;
     setButtons(false);
+    stopClock();
+    persistTiming();
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      void chrome.storage.local.set({ whsRunActive: false });
+    }
+  }
+  async function logPaymentAndStop() {
+    persistTiming();
+    const until = Date.now() + 2500;
+    let url = findPaymentUrl();
+    while (Date.now() < until && !isHostedPayUrl(url)) {
+      await sleep(100);
+      url = findPaymentUrl();
+    }
+    const line = timingSummary();
+    if (isHostedPayUrl(url)) {
+      console.log(url);
+      console.log(line);
+      addLog("PAY_LINK", url);
+      try {
+        await chrome.storage.local.set({ whsPayLogged: true });
+      } catch {
+      }
+      await notifyTelegram(url, line);
+    } else {
+      console.log(line);
+    }
+    addLog("DONE", "\u0110\xE3 t\u1EDBi trang thanh to\xE1n \u2014 " + line);
+    if (sessionStorage.getItem(RUN_KEY) === "1") stopRun();
+  }
+  async function announcePaystationArrival() {
+    let stored = {};
+    try {
+      stored = await chrome.storage.local.get([
+        "whsPayLogged",
+        "whsT0",
+        "whsRunActive",
+        "whsCaptchaTotal",
+        "whsCaptchaCount",
+        "whsCaptchaWait"
+      ]);
+    } catch {
+      return;
+    }
+    if (stored.whsPayLogged) return;
+    if (!stored.whsT0 && !stored.whsRunActive) return;
+    const url = findPaymentUrl();
+    const line = timingFromPersisted(stored);
+    console.log(url);
+    console.log(line);
+    addLog("PAY_LINK", url);
+    addLog("SUMMARY", line);
+    await notifyTelegram(url, line);
+    try {
+      await chrome.storage.local.set({ whsPayLogged: true, whsRunActive: false });
+    } catch {
+    }
   }
   async function loadApplicant() {
     const stored = await chrome.storage.local.get(["applicant", "credentials"]);
@@ -940,7 +1259,7 @@
     };
   }
   async function stepOnce(data, creds) {
-    await tickYesNow();
+    if (hasSuffix("falseStatementCheckBox")) await tickYesNow();
     await waitCaptcha(false, false);
     if (await recoverHighLoad(stopRun)) return;
     const page = detectPage();
@@ -995,6 +1314,10 @@
     if (page === "country") {
       const country = data.scheme_country || "JAPAN";
       const before = location.href;
+      if (wasClickedRecently("clickCountry")) {
+        await waitNav(before);
+        return;
+      }
       const started = Date.now();
       addLog("COUNTRY", country);
       sessionStorage.setItem("whsPendingNav", JSON.stringify({ from: shortUrl(before), t: started, op: "COUNTRY" }));
@@ -1005,6 +1328,7 @@
         stopRun();
         return;
       }
+      markClicked("clickCountry");
       await sleep(200);
       await waitCaptcha();
       await waitNav(before);
@@ -1012,9 +1336,11 @@
       return;
     }
     if (page === "captcha") {
+      const before = location.href;
       const clicked = await waitCaptcha();
       if (sessionStorage.getItem(RUN_KEY) !== "1") return;
       if (!clicked) await clickAndWait("clickNext");
+      else await waitNav(before);
       return;
     }
     const fillStart = Date.now();
@@ -1048,13 +1374,11 @@
     }
     if (action === "payer_ok") {
       await clickAndWait("clickOk");
-      addLog("DONE", "\u0110\xE3 \u0111i\u1EC1n payer + OK. Trang th\u1EBB l\xE0 b\u01B0\u1EDBc cu\u1ED1i \u2014 bot d\u1EEBng.");
-      stopRun();
+      await logPaymentAndStop();
       return;
     }
     if (action === "done_pay") {
-      addLog("DONE", "\u0110\xE3 t\u1EDBi trang thanh to\xE1n th\u1EBB \u2014 xong bot.");
-      stopRun();
+      await logPaymentAndStop();
       return;
     }
     if (action === "pay_later") {
@@ -1070,6 +1394,7 @@
     if (fresh) resetLog();
     else if (!sessionStorage.getItem(T0_KEY)) resetLog();
     setButtons(true);
+    startClock();
     addLog("RUN", shortUrl(location.href));
     finishPendingNav();
     try {
@@ -1097,11 +1422,17 @@
     const existing = document.getElementById("whs-panel");
     if (existing) {
       setPanel(existing);
+      if (!existing.querySelector(".whs-clock")) {
+        const head = existing.querySelector(".whs-head");
+        const clock = document.createElement("span");
+        clock.className = "whs-clock";
+        head?.appendChild(clock);
+      }
       return;
     }
     const next = document.createElement("div");
     next.id = "whs-panel";
-    next.innerHTML = '<div class="whs-head"><span>NZ WHS Auto Fill</span></div><div class="whs-body"><div class="whs-status">B\u1EA5m Ch\u1EA1y. Log th\u1EDDi gian \u1EDF d\u01B0\u1EDBi.</div><pre class="whs-log">Ch\u01B0a c\xF3 log. B\u1EA5m Ch\u1EA1y.</pre><div class="whs-row"><button class="whs-run" type="button">Ch\u1EA1y</button><button class="whs-stop" type="button" disabled>D\u1EEBng</button><button class="whs-opts" type="button">D\u1EEF li\u1EC7u</button><button class="whs-copy" type="button">Copy log</button></div></div>';
+    next.innerHTML = '<div class="whs-head"><span>NZ WHS Auto Fill</span><span class="whs-clock"></span></div><div class="whs-body"><div class="whs-status">B\u1EA5m Ch\u1EA1y. Log th\u1EDDi gian \u1EDF d\u01B0\u1EDBi.</div><pre class="whs-log">Ch\u01B0a c\xF3 log. B\u1EA5m Ch\u1EA1y.</pre><div class="whs-row"><button class="whs-run" type="button">Ch\u1EA1y</button><button class="whs-stop" type="button" disabled>D\u1EEBng</button><button class="whs-opts" type="button">D\u1EEF li\u1EC7u</button><button class="whs-copy" type="button">Copy log</button></div></div>';
     document.documentElement.appendChild(next);
     setPanel(next);
     next.querySelector(".whs-run")?.addEventListener("click", () => {
@@ -1109,7 +1440,6 @@
     });
     next.querySelector(".whs-stop")?.addEventListener("click", () => {
       stopRun();
-      setStatus("\u0110\xE3 d\u1EEBng. Log v\u1EABn gi\u1EEF.");
     });
     next.querySelector(".whs-opts")?.addEventListener("click", () => chrome.runtime.openOptionsPage());
     next.querySelector(".whs-copy")?.addEventListener("click", () => copyLog());
@@ -1119,15 +1449,19 @@
     if (msg?.type === "START") void runLoop(true);
     if (msg?.type === "STOP") {
       stopRun();
-      setStatus("\u0110\xE3 d\u1EEBng.");
     }
   });
   mountPanel();
-  startHighLoadWatch(stopRun);
-  if (sessionStorage.getItem(RUN_KEY) === "1") {
-    setStatus("Ti\u1EBFp t\u1EE5c sau khi chuy\u1EC3n trang...");
-    setTimeout(() => {
-      void runLoop();
-    }, 100);
+  if (isPaystationHost()) {
+    void announcePaystationArrival();
+  } else {
+    startHighLoadWatch(stopRun);
+    if (sessionStorage.getItem(RUN_KEY) === "1") {
+      setStatus("Ti\u1EBFp t\u1EE5c sau khi chuy\u1EC3n trang...");
+      startClock();
+      setTimeout(() => {
+        void runLoop();
+      }, 100);
+    }
   }
 })();

@@ -1,5 +1,12 @@
 .env
+.telegram.json
 .venv/
+__pycache__/
+*.pyc
+.DS_Store
+screenshots/
+logs/
+node_modules/
 __pycache__/
 *.pyc
 .DS_Store

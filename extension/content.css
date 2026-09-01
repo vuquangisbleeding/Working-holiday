@@ -10,7 +10,7 @@
   right: 16px;
   bottom: 16px;
   z-index: 2147483646;
-  width: 420px;
+  width: 460px;
   font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
   color: #1c2430;
   background: #fff;
@@ -25,12 +25,22 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   padding: 8px 10px;
   background: var(--whs-navy);
   color: #fff;
   border-radius: 10px 10px 0 0;
   font-weight: 650;
   font-size: 12px;
+}
+
+#whs-panel .whs-clock {
+  font-weight: 500;
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: right;
+  opacity: 0.92;
+  max-width: 62%;
 }
 
 #whs-panel .whs-body { padding: 10px; }

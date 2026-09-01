@@ -1,7 +1,7 @@
 import { callBridge, waitPostback } from "./bridge";
 import { tickYesNow, waitCaptcha, waitNav } from "./captcha";
 import { addLog, withStuck } from "./log";
-import { setActivity, shortUrl, sleep } from "./state";
+import { setActivity, shortUrl, sleep, wasClickedRecently, markClicked } from "./state";
 
 export function finishPendingNav(): void {
   const raw = sessionStorage.getItem("whsPendingNav");
@@ -23,17 +23,21 @@ function clickLabel(r: Record<string, unknown> | undefined, fallback: string): s
 }
 
 async function clickSubmitFallback(): Promise<Record<string, unknown> | undefined> {
-  addLog("CLICK", "Không có Next/SAVE trên " + shortUrl(location.href) + " — bấm SUBMIT");
+  addLog("CLICK", "Không có Next trên " + shortUrl(location.href) + " — bấm SUBMIT");
   setActivity(shortUrl(location.href), "bấm SUBMIT");
   await tickYesNow();
   const clicked = await waitCaptcha(true);
   if (clicked) return { ok: true, clicked: "SUBMIT" };
+  if (wasClickedRecently("clickSubmit")) return { ok: true, skipped: true };
   const sub = await callBridge("clickSubmit");
-  if (sub?.ok) addLog("CLICK", "Đã bấm " + clickLabel(sub, "SUBMIT") + " trên " + shortUrl(location.href));
+  if (sub?.ok) markClicked("clickSubmit");
   return sub;
 }
 
 async function advanceWithoutNext(before: string): Promise<Record<string, unknown> | undefined> {
+  const canSubmit = await callBridge("hasSubmit");
+  if (canSubmit?.ok) return clickSubmitFallback();
+
   addLog("CLICK", "Không có Next trên " + shortUrl(before) + " — tìm SAVE");
   const save = await callBridge("clickSave");
   if (!save?.ok) return clickSubmitFallback();
@@ -66,6 +70,12 @@ export async function clickAndWait(op: string, payload?: unknown): Promise<Recor
   const started = Date.now();
   const label = op.replace(/^click/i, "").toUpperCase();
   setActivity(shortUrl(before), "bấm " + label);
+  if (wasClickedRecently(op)) {
+    addLog("CLICK", "Chờ trang sau " + label + " (đã bấm trên " + shortUrl(before) + ")");
+    await waitNav(before);
+    finishPendingNav();
+    return { ok: true, skipped: true };
+  }
   addLog("CLICK", "Tìm " + label + " trên " + shortUrl(before));
   sessionStorage.setItem(
     "whsPendingNav",
@@ -76,6 +86,7 @@ export async function clickAndWait(op: string, payload?: unknown): Promise<Recor
   if (op === "clickNext" && (!r || !r.ok)) r = await advanceWithoutNext(before);
 
   if (r?.clicked === "SAVE" && location.href === before) {
+    markClicked(op);
     finishPendingNav();
     return r;
   }
@@ -85,10 +96,12 @@ export async function clickAndWait(op: string, payload?: unknown): Promise<Recor
     addLog("ERR", "Không bấm được " + label + " trên " + shortUrl(location.href), Date.now() - started);
     return r;
   }
+  markClicked(op);
   addLog("CLICK", "Đã bấm " + clickLabel(r, label) + " trên " + shortUrl(before));
   const clickAgain = op !== "clickSubmit" && op !== "clickPayNow" && op !== "clickPayLater" && op !== "clickOk";
   await waitCaptcha(false, clickAgain);
-  await waitNav(before);
+  const navTimeout = op === "clickOk" || op === "clickPayNow" || op === "clickNextStep" ? 45000 : 20000;
+  await waitNav(before, navTimeout);
   finishPendingNav();
   return r;
 }

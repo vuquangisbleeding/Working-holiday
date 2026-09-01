@@ -36,13 +36,13 @@ function tickDeclaration(): Record<string, unknown> {
   ];
   const tick = (el: HTMLInputElement) => {
     if (!el || el.type !== "checkbox" || el.disabled) return false;
+    if (el.checked) return true;
     try {
       el.click();
     } catch {
       // ignore
     }
     el.checked = true;
-    el.dispatchEvent(new Event("click", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     if (!el.checked && el.id) {
       const label = document.querySelector('label[for="' + el.id + '"]');
@@ -59,7 +59,6 @@ function tickDeclaration(): Record<string, unknown> {
     boxes.push(el as HTMLInputElement);
   };
   suffixes.forEach((s) => document.querySelectorAll('input[type="checkbox"][id$="' + s + '"]').forEach(add));
-  document.querySelectorAll('input[type="checkbox"]').forEach(add);
   let checked = 0;
   for (const el of boxes) {
     if (!el.disabled && tick(el)) checked += 1;

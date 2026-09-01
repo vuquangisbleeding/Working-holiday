@@ -14,6 +14,9 @@ header p { margin: 6px 0 0; color: #c9d4e3; font-size: 13px; }
 section { padding: 16px 24px; }
 h2 { font-size: 15px; margin: 0 0 10px; }
 label { display: block; margin: 0 0 8px; font-weight: 600; }
+label.check { font-weight: 600; }
+label.check input { width: auto; margin-right: 8px; }
+.hint { margin: 0 0 10px; color: #5b6573; font-size: 13px; max-width: 900px; }
 input, textarea {
   width: 100%;
   max-width: 900px;

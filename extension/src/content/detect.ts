@@ -1,6 +1,10 @@
 import { addLog } from "./log";
-import { isCaptchaUrl, isChallengeCaptcha, recaptchaSolved } from "./captcha";
-import { hasSuffix, RUN_KEY, setStatus, sleep } from "./state";
+import { isCaptchaUrl, isChallengeCaptcha } from "./captcha";
+import { hasSuffix, RUN_KEY, setStatus, sleep, HL_LAST_AT_KEY, wasAnyClickRecently } from "./state";
+
+function pagePath(): string {
+  return location.pathname.toLowerCase();
+}
 
 function pageBlob(): string {
   const parts = [document.title || ""];
@@ -37,6 +41,18 @@ function isTryAgainLater(): boolean {
 }
 
 export function isHighLoad(): boolean {
+  if (
+    hasSuffix(
+      "familyNameTextBox",
+      "passportNumberTextBox",
+      "imprisonment5YearsDropDownList",
+      "previousWhsPermitVisaDropDownList",
+      "falseStatementCheckBox",
+      "payerNameTextBox",
+    )
+  ) {
+    return false;
+  }
   const text = pageBlob();
   return (
     text.includes("site is under high load") ||
@@ -117,18 +133,43 @@ function isCardGateway(): boolean {
   return !!document.querySelector("iframe[src*='paystation'], iframe[src*='paymark'], iframe[src*='paymentexpress']");
 }
 
+export function findPaymentUrl(): string {
+  const href = location.href;
+  if (/payments\.paystation\.co\.nz\/hosted/i.test(href)) return href;
+  const frames = Array.from(document.querySelectorAll("iframe")) as HTMLIFrameElement[];
+  for (const f of frames) {
+    const src = f.src || f.getAttribute("src") || "";
+    if (/paystation\.co\.nz\/hosted/i.test(src)) return src;
+  }
+  const links = Array.from(document.querySelectorAll("a[href]")) as HTMLAnchorElement[];
+  for (const a of links) {
+    if (/paystation\.co\.nz\/hosted/i.test(a.href)) return a.href;
+  }
+  return href;
+}
+
+export function isPaystationHost(): boolean {
+  return /paystation\.co\.nz/i.test(location.hostname);
+}
+
+export function isHostedPayUrl(url: string): boolean {
+  return /payments\.paystation\.co\.nz\/hosted/i.test(url);
+}
+
 export function detectPage(): string {
   const url = location.href;
+  const path = pagePath();
   const body = (document.body && document.body.innerText) || "";
+  if (isCaptchaUrl()) return "captcha";
   if (isHighLoad()) return "highload";
   if (isAccessDenied()) return "denied";
   if (isQuotaClosed()) return "quota";
-  if (url.includes("Personal1.aspx") || hasSuffix("familyNameTextBox")) return "personal1";
-  if (url.includes("Personal2.aspx") || hasSuffix("passportNumberTextBox")) return "personal2";
-  if (url.includes("Personal3.aspx")) return "personal3";
-  if (url.includes("Medical1.aspx") || hasSuffix("renalDialysisDropDownList")) return "health";
-  if (url.includes("Character.aspx") || hasSuffix("imprisonment5YearsDropDownList")) return "character";
-  if (url.includes("WorkingHolidaySpecific.aspx") || hasSuffix("previousWhsPermitVisaDropDownList")) return "whs";
+  if (path.includes("personal1.aspx") || hasSuffix("familyNameTextBox")) return "personal1";
+  if (path.includes("personal2.aspx") || hasSuffix("passportNumberTextBox")) return "personal2";
+  if (path.includes("personal3.aspx")) return "personal3";
+  if (path.includes("medical1.aspx") || hasSuffix("renalDialysisDropDownList")) return "health";
+  if (path.includes("character.aspx") || hasSuffix("imprisonment5YearsDropDownList")) return "character";
+  if (path.includes("workingholidayspecific.aspx") || hasSuffix("previousWhsPermitVisaDropDownList")) return "whs";
   if (isCardGateway() && !hasPayerNameField()) return "pay_card";
   if (hasPayerNameField()) return "payer";
   if (hasPaymentGatewayLink() || buttonTextHit(["NEXT STEP"]) || buttonTextHit(["SECURE PAYMENT"])) return "pay_next";
@@ -139,11 +180,9 @@ export function detectPage(): string {
   ) {
     return "pay_now";
   }
-  if (url.includes("Submit.aspx") || hasSuffix("falseStatementCheckBox")) return "declaration";
-  if ((isCaptchaUrl() && !recaptchaSolved()) || (isChallengeCaptcha() && !hasSuffix("familyNameTextBox"))) {
-    return "captcha";
-  }
-  if (url.includes("OnlinePayment.aspx") || url.includes("OnLinePayment.aspx")) return "pay_next";
+  if (path.includes("submit.aspx") || hasSuffix("falseStatementCheckBox")) return "declaration";
+  if (isChallengeCaptcha() && !hasSuffix("familyNameTextBox")) return "captcha";
+  if (path.includes("onlinepayment.aspx")) return "pay_next";
   if (document.querySelector('[name="username"]') && document.querySelector('[name="password"]')) return "login";
   if (document.querySelector("a[id^='ContentPlaceHolder1_applicationList_applicationsDataGrid_editHyperLink_']")) {
     return "existing";
@@ -154,11 +193,20 @@ export function detectPage(): string {
 }
 
 const HL_RELOAD_KEY = "whsHlReloading";
+const HL_MIN_GAP_MS = 1500;
+
+function pageLooksEmpty(): boolean {
+  if (document.readyState === "loading") return true;
+  const compact = pageBlob().replace(/\s+/g, " ").trim();
+  return compact.length < 8;
+}
 
 export async function recoverHighLoad(stopRun: () => void): Promise<boolean> {
   if (!isHighLoad()) {
-    sessionStorage.removeItem("whsHighLoadTries");
-    sessionStorage.removeItem(HL_RELOAD_KEY);
+    if (!pageLooksEmpty()) {
+      sessionStorage.removeItem("whsHighLoadTries");
+      sessionStorage.removeItem(HL_RELOAD_KEY);
+    }
     return false;
   }
   if (isQuotaClosed()) {
@@ -166,19 +214,20 @@ export async function recoverHighLoad(stopRun: () => void): Promise<boolean> {
     stopRun();
     return true;
   }
+  if (wasAnyClickRecently(3000)) return false;
   if (sessionStorage.getItem(HL_RELOAD_KEY) === "1") return true;
   const n = Number(sessionStorage.getItem("whsHighLoadTries") || "0") + 1;
   sessionStorage.setItem("whsHighLoadTries", String(n));
   sessionStorage.setItem(HL_RELOAD_KEY, "1");
   const kind = isTryAgainLater() ? "TRY_AGAIN" : "HIGH_LOAD";
-  if (n > 1) {
-    const inApp = /applicationid=/i.test(location.href);
-    const wait = inApp ? Math.min(400 * n, 3000) : Math.min(800 * n, 5000);
-    addLog(kind, "F5 sau " + (wait / 1000).toFixed(1) + "s (lần " + n + ")");
-    await sleep(wait);
-  } else {
-    addLog(kind, isTryAgainLater() ? "Please try again later — F5 ngay" : "F5 ngay");
-  }
+  const lastAt = Number(sessionStorage.getItem(HL_LAST_AT_KEY) || "0");
+  const since = Date.now() - lastAt;
+  const inApp = /applicationid=/i.test(location.href);
+  const backoff = n === 1 ? (isTryAgainLater() ? 800 : 400) : inApp ? Math.min(400 * n, 3000) : Math.min(800 * n, 5000);
+  const wait = Math.max(backoff, lastAt ? Math.max(0, HL_MIN_GAP_MS - since) : backoff);
+  addLog(kind, "F5 sau " + (wait / 1000).toFixed(1) + "s (lần " + n + ")");
+  if (wait > 0) await sleep(wait);
+  sessionStorage.setItem(HL_LAST_AT_KEY, String(Date.now()));
   try {
     location.reload();
   } catch {
@@ -191,10 +240,11 @@ let highLoadWatch: number | undefined;
 
 export function startHighLoadWatch(stopRun: () => void): void {
   if (highLoadWatch) return;
+  sessionStorage.removeItem(HL_RELOAD_KEY);
   highLoadWatch = window.setInterval(() => {
     if (sessionStorage.getItem(RUN_KEY) !== "1") return;
     if (!isHighLoad()) {
-      sessionStorage.removeItem(HL_RELOAD_KEY);
+      if (!pageLooksEmpty()) sessionStorage.removeItem(HL_RELOAD_KEY);
       return;
     }
     void recoverHighLoad(stopRun);

@@ -1,4 +1,4 @@
-import { LAST_PAGE_KEY, LOG_KEY, panel, setStatus, T0_KEY, describeActivity } from "./state";
+import { LAST_PAGE_KEY, LOG_KEY, panel, setStatus, T0_KEY, describeActivity, timingSummary, resetTiming, persistTiming } from "./state";
 
 interface LogEntry {
   t: string;
@@ -44,6 +44,34 @@ export function renderLog(): void {
   if (!box) return;
   box.textContent = loadLog().map(logLine).join("\n") || "Chưa có log. Bấm Chạy.";
   box.scrollTop = box.scrollHeight;
+  renderClock();
+}
+
+export function renderClock(): void {
+  const el = panel?.querySelector(".whs-clock");
+  if (!el) return;
+  if (!sessionStorage.getItem(T0_KEY)) {
+    el.textContent = "";
+    return;
+  }
+  el.textContent = timingSummary();
+  persistTiming();
+}
+
+let clockTimer: number | undefined;
+
+export function startClock(): void {
+  renderClock();
+  if (clockTimer) return;
+  clockTimer = window.setInterval(renderClock, 250);
+}
+
+export function stopClock(): void {
+  if (clockTimer) {
+    clearInterval(clockTimer);
+    clockTimer = undefined;
+  }
+  renderClock();
 }
 
 export function addLog(kind: string, text: string, durMs?: number): void {
@@ -65,14 +93,16 @@ export function addLog(kind: string, text: string, durMs?: number): void {
 }
 
 export function resetLog(): void {
-  sessionStorage.setItem(T0_KEY, String(Date.now()));
+  resetTiming();
   sessionStorage.setItem(LOG_KEY, "[]");
   sessionStorage.removeItem(LAST_PAGE_KEY);
   renderLog();
 }
 
 export function copyLog(): void {
-  const text = loadLog().map(logLine).join("\n");
+  const lines = loadLog().map(logLine);
+  if (sessionStorage.getItem(T0_KEY)) lines.push(timingSummary());
+  const text = lines.join("\n");
   if (!text) return;
   navigator.clipboard.writeText(text).then(
     () => setStatus("Đã copy log.", "ok"),

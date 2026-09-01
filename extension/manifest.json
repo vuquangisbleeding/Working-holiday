@@ -4,7 +4,12 @@
   "version": "1.0.0",
   "description": "Tự điền form Working Holiday NZ: bấm nút trên trang, điền trường, Next, Submit, Pay Later.",
   "permissions": ["storage", "activeTab"],
-  "host_permissions": ["https://onlineservices.immigration.govt.nz/*"],
+  "host_permissions": [
+    "https://onlineservices.immigration.govt.nz/*",
+    "https://payments.paystation.co.nz/*",
+    "https://api.telegram.org/*",
+    "http://127.0.0.1:5050/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -21,7 +26,10 @@
       "world": "MAIN"
     },
     {
-      "matches": ["https://onlineservices.immigration.govt.nz/*"],
+      "matches": [
+        "https://onlineservices.immigration.govt.nz/*",
+        "https://payments.paystation.co.nz/*"
+      ],
       "js": ["content.js"],
       "css": ["content.css"],
       "run_at": "document_idle"

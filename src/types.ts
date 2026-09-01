@@ -89,6 +89,12 @@ export interface Credentials {
   password?: string;
 }
 
+export interface TelegramSettings {
+  enabled?: boolean;
+  botToken?: string;
+  chatId?: string;
+}
+
 export const DEFAULT_WHS = {
   previous_whs_visa: "No",
   sufficient_funds_holiday: "Yes",

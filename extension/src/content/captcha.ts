@@ -1,6 +1,6 @@
 import { callBridge } from "./bridge";
 import { addLog, withStuck } from "./log";
-import { hasSuffix, RUN_KEY, sleep } from "./state";
+import { hasSuffix, RUN_KEY, sleep, markClicked, beginCaptchaWait, endCaptchaWait } from "./state";
 
 const TOKEN_MIN = 20;
 const POLL_MS = 50;
@@ -76,6 +76,11 @@ function captchaBlocking(includeSubmitWidget: boolean): boolean {
 
 export async function tickYesNow(): Promise<Record<string, unknown> | null> {
   if (!hasSuffix("falseStatementCheckBox")) return null;
+  const unchecked = Array.from(document.querySelectorAll('input[type="checkbox"]')).some((el) => {
+    const box = el as HTMLInputElement;
+    return box.type === "checkbox" && !box.disabled && !box.checked && /CheckBox$/i.test(box.id || "");
+  });
+  if (!unchecked) return { skipped: true, checked: 1 };
   try {
     return await callBridge("tickDeclaration");
   } catch {
@@ -107,17 +112,12 @@ async function clickAdvanceAfterCaptcha(preferSubmit: boolean, beforeUrl: string
   if (await pageLeft(beforeUrl)) return { ok: true, clicked: "NAV" };
   try {
     const r = await callBridge("clickAfterCaptcha", { preferSubmit });
-    if (r?.ok) return r;
+    if (r?.ok) {
+      markClicked(preferSubmit ? "clickSubmit" : "clickNext");
+      return r;
+    }
   } catch {
     // button may still be disabled for a tick after the token appears
-  }
-  await sleep(200);
-  if (await pageLeft(beforeUrl)) return { ok: true, clicked: "NAV" };
-  try {
-    const again = await callBridge("clickAfterCaptcha", { preferSubmit });
-    if (again?.ok) return again;
-  } catch {
-    // ignore
   }
   return null;
 }
@@ -131,12 +131,7 @@ function waitUntilSolvedOrUnblocked(includeSubmitWidget: boolean): Promise<void>
       stop();
       resolve();
     };
-    let lastTick = 0;
     const onTick = () => {
-      if (Date.now() - lastTick > 400) {
-        lastTick = Date.now();
-        void tickYesNow();
-      }
       if (sessionStorage.getItem(RUN_KEY) !== "1" || recaptchaSolved() || !captchaBlocking(includeSubmitWidget)) {
         finish();
       }
@@ -160,36 +155,64 @@ function waitUntilSolvedOrUnblocked(includeSubmitWidget: boolean): Promise<void>
 export async function waitCaptcha(includeSubmitWidget = false, clickWhenSolved = true): Promise<boolean> {
   if (!captchaBlocking(includeSubmitWidget)) return false;
   dumpCaptchaInfo();
-  const started = Date.now();
+  beginCaptchaWait();
   const beforeUrl = location.href;
   addLog("CAPTCHA", includeSubmitWidget ? "Chờ reCAPTCHA trước SUBMIT" : "Chờ captcha (đã tick Yes nếu có)");
-  await withStuck(includeSubmitWidget ? "chờ reCAPTCHA SUBMIT" : "chờ captcha", () =>
-    waitUntilSolvedOrUnblocked(includeSubmitWidget),
-  );
-  if (sessionStorage.getItem(RUN_KEY) !== "1") return false;
-  if (!clickWhenSolved) {
-    addLog("CAPTCHA", "Xong captcha", Date.now() - started);
-    return false;
+  try {
+    await withStuck(includeSubmitWidget ? "chờ reCAPTCHA SUBMIT" : "chờ captcha", () =>
+      waitUntilSolvedOrUnblocked(includeSubmitWidget),
+    );
+    const waited = endCaptchaWait();
+    if (waited >= 100) addLog("CAPTCHA", "Xong captcha", waited);
+    if (sessionStorage.getItem(RUN_KEY) !== "1") return false;
+    if (!clickWhenSolved) return false;
+    const advanced = await clickAdvanceAfterCaptcha(includeSubmitWidget, beforeUrl);
+    if (advanced?.ok && advanced.clicked !== "NAV") {
+      const label = String(advanced.clicked || "NEXT");
+      const id = advanced.id ? " #" + String(advanced.id).split("_").pop() : "";
+      addLog("CLICK", "Captcha xong — bấm " + label + id + " ngay");
+    }
+    return !!advanced?.ok;
+  } finally {
+    endCaptchaWait();
   }
-  const advanced = await clickAdvanceAfterCaptcha(includeSubmitWidget, beforeUrl);
-  if (advanced?.ok && advanced.clicked !== "NAV") {
-    const label = String(advanced.clicked || "NEXT");
-    const id = advanced.id ? " #" + String(advanced.id).split("_").pop() : "";
-    addLog("CLICK", "Captcha xong — bấm " + label + id + " ngay");
-  }
-  addLog("CAPTCHA", "Xong captcha", Date.now() - started);
-  return !!advanced?.ok;
 }
 
 export async function waitNav(beforeUrl: string, timeout = 20000): Promise<boolean> {
-  const { isAccessDenied, isHighLoad } = await import("./detect");
-  return withStuck("chờ chuyển trang " + beforeUrl, async () => {
-    const start = Date.now();
-    while (Date.now() - start < timeout) {
-      if (sessionStorage.getItem(RUN_KEY) !== "1") return false;
-      if (location.href !== beforeUrl || isChallengeCaptcha() || isHighLoad() || isAccessDenied()) return true;
-      await sleep(80);
-    }
-    return location.href !== beforeUrl;
-  });
+  const { isAccessDenied, isHighLoad, findPaymentUrl, isHostedPayUrl } = await import("./detect");
+  let unloading = false;
+  const onGone = () => {
+    unloading = true;
+  };
+  window.addEventListener("pagehide", onGone);
+  window.addEventListener("beforeunload", onGone);
+  try {
+    return await withStuck("chờ chuyển trang " + beforeUrl, async () => {
+      const start = Date.now();
+      while (Date.now() - start < timeout) {
+        if (sessionStorage.getItem(RUN_KEY) !== "1") return false;
+        const pay = findPaymentUrl();
+        if (
+          location.href !== beforeUrl ||
+          unloading ||
+          isChallengeCaptcha() ||
+          isHighLoad() ||
+          isAccessDenied() ||
+          (pay !== beforeUrl && isHostedPayUrl(pay)) ||
+          !!document.querySelector("iframe[src*='paystation']")
+        ) {
+          return true;
+        }
+        await sleep(80);
+      }
+      return location.href !== beforeUrl || unloading;
+    });
+  } finally {
+    window.removeEventListener("pagehide", onGone);
+    window.removeEventListener("beforeunload", onGone);
+  }
 }
+
+window.addEventListener("pagehide", () => {
+  endCaptchaWait();
+});

@@ -2,11 +2,12 @@ import { DEFAULT_APPLICANT } from "./default-data";
 import type { Applicant, Credentials } from "../../src/types";
 import { callBridge, injectBridge } from "./content/bridge";
 import { tickYesNow, waitCaptcha, waitNav } from "./content/captcha";
-import { detectPage, recoverHighLoad, startHighLoadWatch } from "./content/detect";
+import { detectPage, recoverHighLoad, startHighLoadWatch, findPaymentUrl, isPaystationHost, isHostedPayUrl } from "./content/detect";
 import { fillPage } from "./content/fill";
-import { addLog, copyLog, renderLog, resetLog, withStuck } from "./content/log";
+import { addLog, copyLog, renderLog, resetLog, withStuck, startClock, stopClock } from "./content/log";
 import { clickAndWait, finishPendingNav } from "./content/nav";
-import { LAST_PAGE_KEY, MAX_PAGES, panel, RUN_KEY, setActivity, setPanel, setStatus, shortUrl, sleep, T0_KEY } from "./content/state";
+import { LAST_PAGE_KEY, MAX_PAGES, panel, RUN_KEY, setActivity, setPanel, setStatus, shortUrl, sleep, T0_KEY, wasClickedRecently, markClicked, timingSummary, hasSuffix, persistTiming, timingFromPersisted } from "./content/state";
+import { notifyTelegram } from "./content/telegram";
 
 let running = false;
 
@@ -20,11 +21,73 @@ function setButtons(isRunning: boolean): void {
 
 function stopRun(): void {
   if (sessionStorage.getItem(RUN_KEY) === "1" && sessionStorage.getItem(T0_KEY)) {
-    addLog("SUMMARY", "Tổng từ lúc Chạy: " + ((Date.now() - Number(sessionStorage.getItem(T0_KEY))) / 1000).toFixed(2) + "s");
+    persistTiming();
+    addLog("SUMMARY", timingSummary());
   }
   sessionStorage.removeItem(RUN_KEY);
   running = false;
   setButtons(false);
+  stopClock();
+  persistTiming();
+  if (typeof chrome !== "undefined" && chrome.storage?.local) {
+    void chrome.storage.local.set({ whsRunActive: false });
+  }
+}
+
+async function logPaymentAndStop(): Promise<void> {
+  persistTiming();
+  const until = Date.now() + 2500;
+  let url = findPaymentUrl();
+  while (Date.now() < until && !isHostedPayUrl(url)) {
+    await sleep(100);
+    url = findPaymentUrl();
+  }
+  const line = timingSummary();
+  if (isHostedPayUrl(url)) {
+    console.log(url);
+    console.log(line);
+    addLog("PAY_LINK", url);
+    try {
+      await chrome.storage.local.set({ whsPayLogged: true });
+    } catch {
+      // ignore
+    }
+    await notifyTelegram(url, line);
+  } else {
+    console.log(line);
+  }
+  addLog("DONE", "Đã tới trang thanh toán — " + line);
+  if (sessionStorage.getItem(RUN_KEY) === "1") stopRun();
+}
+
+async function announcePaystationArrival(): Promise<void> {
+  let stored: Record<string, unknown> = {};
+  try {
+    stored = await chrome.storage.local.get([
+      "whsPayLogged",
+      "whsT0",
+      "whsRunActive",
+      "whsCaptchaTotal",
+      "whsCaptchaCount",
+      "whsCaptchaWait",
+    ]);
+  } catch {
+    return;
+  }
+  if (stored.whsPayLogged) return;
+  if (!stored.whsT0 && !stored.whsRunActive) return;
+  const url = findPaymentUrl();
+  const line = timingFromPersisted(stored);
+  console.log(url);
+  console.log(line);
+  addLog("PAY_LINK", url);
+  addLog("SUMMARY", line);
+  await notifyTelegram(url, line);
+  try {
+    await chrome.storage.local.set({ whsPayLogged: true, whsRunActive: false });
+  } catch {
+    // ignore
+  }
 }
 
 async function loadApplicant(): Promise<{ applicant: Applicant; credentials: Credentials }> {
@@ -36,7 +99,7 @@ async function loadApplicant(): Promise<{ applicant: Applicant; credentials: Cre
 }
 
 async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
-  await tickYesNow();
+  if (hasSuffix("falseStatementCheckBox")) await tickYesNow();
   await waitCaptcha(false, false);
   if (await recoverHighLoad(stopRun)) return;
   const page = detectPage();
@@ -91,6 +154,10 @@ async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
   if (page === "country") {
     const country = data.scheme_country || "JAPAN";
     const before = location.href;
+    if (wasClickedRecently("clickCountry")) {
+      await waitNav(before);
+      return;
+    }
     const started = Date.now();
     addLog("COUNTRY", country);
     sessionStorage.setItem("whsPendingNav", JSON.stringify({ from: shortUrl(before), t: started, op: "COUNTRY" }));
@@ -101,6 +168,7 @@ async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
       stopRun();
       return;
     }
+    markClicked("clickCountry");
     await sleep(200);
     await waitCaptcha();
     await waitNav(before);
@@ -108,9 +176,11 @@ async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
     return;
   }
   if (page === "captcha") {
+    const before = location.href;
     const clicked = await waitCaptcha();
     if (sessionStorage.getItem(RUN_KEY) !== "1") return;
     if (!clicked) await clickAndWait("clickNext");
+    else await waitNav(before);
     return;
   }
 
@@ -145,13 +215,11 @@ async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
   }
   if (action === "payer_ok") {
     await clickAndWait("clickOk");
-    addLog("DONE", "Đã điền payer + OK. Trang thẻ là bước cuối — bot dừng.");
-    stopRun();
+    await logPaymentAndStop();
     return;
   }
   if (action === "done_pay") {
-    addLog("DONE", "Đã tới trang thanh toán thẻ — xong bot.");
-    stopRun();
+    await logPaymentAndStop();
     return;
   }
   if (action === "pay_later") {
@@ -168,6 +236,7 @@ async function runLoop(fresh?: boolean): Promise<void> {
   if (fresh) resetLog();
   else if (!sessionStorage.getItem(T0_KEY)) resetLog();
   setButtons(true);
+  startClock();
   addLog("RUN", shortUrl(location.href));
   finishPendingNav();
   try {
@@ -196,12 +265,18 @@ function mountPanel(): void {
   const existing = document.getElementById("whs-panel");
   if (existing) {
     setPanel(existing);
+    if (!existing.querySelector(".whs-clock")) {
+      const head = existing.querySelector(".whs-head");
+      const clock = document.createElement("span");
+      clock.className = "whs-clock";
+      head?.appendChild(clock);
+    }
     return;
   }
   const next = document.createElement("div");
   next.id = "whs-panel";
   next.innerHTML =
-    '<div class="whs-head"><span>NZ WHS Auto Fill</span></div>' +
+    '<div class="whs-head"><span>NZ WHS Auto Fill</span><span class="whs-clock"></span></div>' +
     '<div class="whs-body">' +
     '<div class="whs-status">Bấm Chạy. Log thời gian ở dưới.</div>' +
     '<pre class="whs-log">Chưa có log. Bấm Chạy.</pre>' +
@@ -218,7 +293,6 @@ function mountPanel(): void {
   });
   next.querySelector(".whs-stop")?.addEventListener("click", () => {
     stopRun();
-    setStatus("Đã dừng. Log vẫn giữ.");
   });
   next.querySelector(".whs-opts")?.addEventListener("click", () => chrome.runtime.openOptionsPage());
   next.querySelector(".whs-copy")?.addEventListener("click", () => copyLog());
@@ -229,15 +303,19 @@ chrome.runtime.onMessage.addListener((msg: { type?: string }) => {
   if (msg?.type === "START") void runLoop(true);
   if (msg?.type === "STOP") {
     stopRun();
-    setStatus("Đã dừng.");
   }
 });
 
 mountPanel();
-startHighLoadWatch(stopRun);
-if (sessionStorage.getItem(RUN_KEY) === "1") {
-  setStatus("Tiếp tục sau khi chuyển trang...");
-  setTimeout(() => {
-    void runLoop();
-  }, 100);
+if (isPaystationHost()) {
+  void announcePaystationArrival();
+} else {
+  startHighLoadWatch(stopRun);
+  if (sessionStorage.getItem(RUN_KEY) === "1") {
+    setStatus("Tiếp tục sau khi chuyển trang...");
+    startClock();
+    setTimeout(() => {
+      void runLoop();
+    }, 100);
+  }
 }
