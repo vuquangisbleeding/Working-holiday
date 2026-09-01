@@ -1,0 +1,29 @@
+{
+  "name": "whs-filler",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:ext && npm run build:ui",
+    "build:ext": "node scripts/build-ext.mjs",
+    "build:ui": "esbuild src/dashboard/ui.ts --bundle --format=iife --outfile=static/dashboard.js",
+    "start": "tsx src/dashboard/app.ts",
+    "bot": "tsx src/bot/login.ts"
+  },
+  "dependencies": {
+    "axios": "^1.20.0",
+    "capsolver-npm": "^2.1.11",
+    "dotenv": "^16.6.1",
+    "esbuild": "^0.25.9",
+    "express": "^5.1.0",
+    "selenium-webdriver": "^4.27.0",
+    "tsx": "^4.20.5"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.4",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.3.0",
+    "@types/selenium-webdriver": "^4.1.28",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WHS Filler</title>
+  <style>
+    :root {
+      --bg: #f4f5f7;
+      --panel: #fff;
+      --ink: #1c2430;
+      --muted: #5b6573;
+      --line: #d8dee6;
+      --accent: #c81e4a;
+      --navy: #1e3a5f;
+      --ok: #1f7a4d;
+      --pause: #b45309;
+      --err: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 24px;
+      background: var(--navy);
+      color: #fff;
+      flex-wrap: wrap;
+    }
+    header h1 { margin: 0; font-size: 18px; font-weight: 650; }
+    header p { margin: 4px 0 0; color: #c9d4e3; font-size: 12px; }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 10px 24px;
+      background: #163152;
+      border-top: 1px solid #2b4a70;
+    }
+    button {
+      border: 0;
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-secondary { background: #fff; color: var(--navy); }
+    .btn-ghost { background: #314e73; color: #fff; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 650;
+      background: #e8edf3;
+      color: var(--navy);
+    }
+    .badge.running { background: #dbeafe; color: #1e40af; }
+    .badge.captcha_paused { background: #ffedd5; color: var(--pause); }
+    .badge.done { background: #dcfce7; color: var(--ok); }
+    .badge.error { background: #fee2e2; color: var(--err); }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
+      gap: 16px;
+      padding: 16px 24px 24px;
+    }
+    @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .panel h2 {
+      margin: 0;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+    }
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 10px 12px 0;
+    }
+    .tabs button {
+      background: transparent;
+      color: var(--muted);
+      padding: 6px 10px;
+      border-radius: 6px;
+    }
+    .tabs button.active { background: #eef2f7; color: var(--navy); }
+    .fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 12px;
+      padding: 14px 16px 18px;
+    }
+    .fields .wide { grid-column: 1 / -1; }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font: inherit;
+      color: var(--ink);
+      background: #fff;
+    }
+    textarea { min-height: 72px; resize: vertical; }
+    .banner {
+      display: none;
+      margin: 0 16px 12px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #fff7ed;
+      color: #9a3412;
+      border: 1px solid #fdba74;
+    }
+    .banner.show { display: block; }
+    .log-wrap { display: flex; flex-direction: column; height: calc(100vh - 180px); }
+    .log-meta { padding: 8px 16px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); }
+    pre {
+      margin: 0;
+      padding: 12px 16px;
+      overflow: auto;
+      flex: 1;
+      background: #0f1720;
+      color: #d7e0ea;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: pre-wrap;
+    }
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      background: var(--navy);
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 8px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>WHS Filler</h1>
+      <p>Sửa dữ liệu điền form, chạy bot, xem log. Captcha chỉ tạm dừng, không thoát.</p>
+    </div>
+  </header>
+  <div class="toolbar">
+    <span class="badge" id="statusBadge">idle</span>
+    <button class="btn-secondary" id="saveBtn" type="button">Lưu dữ liệu</button>
+    <button class="btn-primary" id="runBtn" type="button">Chạy bot</button>
+    <button class="btn-ghost" id="stopBtn" type="button">Dừng bot</button>
+  </div>
+
+  <div class="layout">
+    <section class="panel">
+      <h2>Dữ liệu điền form <small id="saveState" style="color:#5b6573;font-weight:500"></small></h2>
+      <div class="tabs" id="tabs"></div>
+      <form id="dataForm"></form>
+    </section>
+
+    <section class="panel log-wrap">
+      <h2>Log chạy</h2>
+      <div class="banner" id="captchaBanner">Captcha đang tạm dừng. Giải trên cửa sổ Chrome — bot sẽ tự chạy tiếp.</div>
+      <div class="log-meta" id="logMeta">Chưa có log</div>
+      <pre id="logView">Chưa có log.</pre>
+    </section>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

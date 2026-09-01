@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <title>NZ WHS</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>NZ WHS Auto Fill</h1>
+  <p>Mở trang INZ, bấm <b>Chạy</b> trên góc phải trang — hoặc bấm dưới đây nếu đang đứng đúng tab.</p>
+  <div class="row">
+    <button id="run" class="primary">Chạy trên tab này</button>
+    <button id="stop">Dừng</button>
+  </div>
+  <button id="opts" class="ghost">Sửa dữ liệu điền form</button>
+  <p class="hint">Cài: chrome://extensions → Developer mode → Load unpacked → chọn thư mục <code>extension</code>. Sửa TypeScript trong <code>extension/src</code> rồi <code>npm run build</code>.</p>
+  <script src="popup.js"></script>
+</body>
+</html>

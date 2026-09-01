@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <title>Dữ liệu NZ WHS</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <header>
+    <h1>Dữ liệu điền form</h1>
+    <p>Lưu trong Chrome. Không gửi đi đâu ngoài máy bạn.</p>
+  </header>
+  <section>
+    <h2>Đăng nhập INZ (tuỳ chọn)</h2>
+    <label>Username <input id="username" autocomplete="username"></label>
+    <label>Password <input id="password" type="password" autocomplete="current-password"></label>
+  </section>
+  <section>
+    <h2>applicant.json</h2>
+    <textarea id="json" spellcheck="false"></textarea>
+    <div class="row">
+      <button id="save" class="primary">Lưu</button>
+      <button id="restore">Khôi phục mặc định</button>
+      <span id="msg"></span>
+    </div>
+  </section>
+  <script src="options.js"></script>
+</body>
+</html>

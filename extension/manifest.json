@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "NZ WHS Auto Fill",
+  "version": "1.0.0",
+  "description": "Tự điền form Working Holiday NZ: bấm nút trên trang, điền trường, Next, Submit, Pay Later.",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": ["https://onlineservices.immigration.govt.nz/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "NZ WHS Auto Fill"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://onlineservices.immigration.govt.nz/*"],
+      "js": ["page-bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://onlineservices.immigration.govt.nz/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["page-bridge.js"],
+      "matches": ["https://onlineservices.immigration.govt.nz/*"]
+    }
+  ]
+}
