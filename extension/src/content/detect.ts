@@ -1,16 +1,39 @@
 import { addLog } from "./log";
-import { isChallengeCaptcha } from "./captcha";
+import { isCaptchaUrl, isChallengeCaptcha, recaptchaSolved } from "./captcha";
 import { hasSuffix, RUN_KEY, setStatus, sleep } from "./state";
 
 function pageBlob(): string {
-  const root = document.documentElement;
-  return [
-    document.title || "",
-    (document.body && (document.body.innerText || document.body.textContent)) || "",
-    (root && (root.innerText || root.textContent)) || "",
-  ]
-    .join(" ")
-    .toLowerCase();
+  const parts = [document.title || ""];
+  const body = document.body;
+  if (body) {
+    for (const child of Array.from(body.childNodes)) {
+      if (child instanceof HTMLElement && child.id === "whs-panel") continue;
+      parts.push((child as HTMLElement).innerText || child.textContent || "");
+    }
+  }
+  return parts.join(" ").toLowerCase();
+}
+
+function isTryAgainLater(): boolean {
+  const compact = pageBlob().replace(/\s+/g, " ").trim();
+  if (!compact.includes("try again later")) return false;
+  if (
+    hasSuffix(
+      "familyNameTextBox",
+      "passportNumberTextBox",
+      "falseStatementCheckBox",
+      "previousWhsPermitVisaDropDownList",
+    )
+  ) {
+    return false;
+  }
+  const leftover = compact
+    .replace(/please try again later\.?/g, "")
+    .replace(/try again later\.?/g, "")
+    .replace(/new zealand immigration/g, "")
+    .replace(/immigration new zealand/g, "")
+    .trim();
+  return leftover.length < 160;
 }
 
 export function isHighLoad(): boolean {
@@ -19,7 +42,19 @@ export function isHighLoad(): boolean {
     text.includes("site is under high load") ||
     text.includes("high demand on the system") ||
     text.includes("experiencing high demand") ||
-    (text.includes("high load") && text.includes("try again later"))
+    (text.includes("high load") && text.includes("try again later")) ||
+    isTryAgainLater()
+  );
+}
+
+export function isAccessDenied(): boolean {
+  const text = pageBlob();
+  return (
+    text.includes("access denied") &&
+    (text.includes("denied access to this page") ||
+      text.includes("session has timed-out") ||
+      text.includes("you don't have 'cookies' enabled") ||
+      text.includes("you don’t have 'cookies' enabled"))
   );
 }
 
@@ -86,6 +121,7 @@ export function detectPage(): string {
   const url = location.href;
   const body = (document.body && document.body.innerText) || "";
   if (isHighLoad()) return "highload";
+  if (isAccessDenied()) return "denied";
   if (isQuotaClosed()) return "quota";
   if (url.includes("Personal1.aspx") || hasSuffix("familyNameTextBox")) return "personal1";
   if (url.includes("Personal2.aspx") || hasSuffix("passportNumberTextBox")) return "personal2";
@@ -104,7 +140,9 @@ export function detectPage(): string {
     return "pay_now";
   }
   if (url.includes("Submit.aspx") || hasSuffix("falseStatementCheckBox")) return "declaration";
-  if (isChallengeCaptcha() && !hasSuffix("familyNameTextBox")) return "captcha";
+  if ((isCaptchaUrl() && !recaptchaSolved()) || (isChallengeCaptcha() && !hasSuffix("familyNameTextBox"))) {
+    return "captcha";
+  }
   if (url.includes("OnlinePayment.aspx") || url.includes("OnLinePayment.aspx")) return "pay_next";
   if (document.querySelector('[name="username"]') && document.querySelector('[name="password"]')) return "login";
   if (document.querySelector("a[id^='ContentPlaceHolder1_applicationList_applicationsDataGrid_editHyperLink_']")) {
@@ -132,13 +170,14 @@ export async function recoverHighLoad(stopRun: () => void): Promise<boolean> {
   const n = Number(sessionStorage.getItem("whsHighLoadTries") || "0") + 1;
   sessionStorage.setItem("whsHighLoadTries", String(n));
   sessionStorage.setItem(HL_RELOAD_KEY, "1");
+  const kind = isTryAgainLater() ? "TRY_AGAIN" : "HIGH_LOAD";
   if (n > 1) {
     const inApp = /applicationid=/i.test(location.href);
     const wait = inApp ? Math.min(400 * n, 3000) : Math.min(800 * n, 5000);
-    addLog("HIGH_LOAD", "F5 sau " + (wait / 1000).toFixed(1) + "s (lần " + n + ")");
+    addLog(kind, "F5 sau " + (wait / 1000).toFixed(1) + "s (lần " + n + ")");
     await sleep(wait);
   } else {
-    addLog("HIGH_LOAD", "F5 ngay");
+    addLog(kind, isTryAgainLater() ? "Please try again later — F5 ngay" : "F5 ngay");
   }
   try {
     location.reload();

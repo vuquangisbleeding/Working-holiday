@@ -2,14 +2,31 @@ import { callBridge } from "./bridge";
 import { addLog, withStuck } from "./log";
 import { hasSuffix, RUN_KEY, sleep } from "./state";
 
-export function isChallengeCaptcha(): boolean {
+const TOKEN_MIN = 20;
+const POLL_MS = 50;
+
+export function isCaptchaUrl(): boolean {
   const url = location.href.toLowerCase();
-  if (url.includes("rs-captcha") || url.includes("/captcha")) return true;
+  return url.includes("rs-captcha") || (url.includes("/captcha") && !url.includes("submit.aspx"));
+}
+
+export function recaptchaSolved(): boolean {
+  const nodes = document.querySelectorAll(
+    "#g-recaptcha-response, textarea[name='g-recaptcha-response'], textarea.g-recaptcha-response, textarea[id*='g-recaptcha-response']",
+  );
+  for (const node of nodes) {
+    if (String((node as HTMLTextAreaElement).value || "").trim().length > TOKEN_MIN) return true;
+  }
+  return false;
+}
+
+export function isChallengeCaptcha(): boolean {
+  if (isCaptchaUrl() && !recaptchaSolved()) return true;
   return Array.from(document.querySelectorAll("iframe")).some((f) => {
     const src = (f.src || "").toLowerCase();
     const title = (f.title || "").toLowerCase();
     const st = getComputedStyle(f);
-    if (st.display === "none" || !f.offsetParent) return false;
+    if (st.display === "none" || st.visibility === "hidden" || !f.offsetParent) return false;
     const challenge = src.includes("bframe") || src.includes("rs-captcha") || title.includes("challenge");
     return challenge && f.offsetWidth > 180 && f.offsetHeight > 180;
   });
@@ -42,21 +59,16 @@ function dumpCaptchaInfo(): void {
 function recaptchaNeedsUser(): boolean {
   const widget = document.querySelector('.g-recaptcha, [data-sitekey], iframe[src*="recaptcha"]');
   if (!widget) return false;
-  const ta = document.querySelector("#g-recaptcha-response, textarea[name='g-recaptcha-response']");
-  return !(ta && String((ta as HTMLTextAreaElement).value || "").trim().length > 10);
+  return !recaptchaSolved();
 }
 
 function onSubmitFlow(): boolean {
   return location.href.toLowerCase().includes("submit.aspx") || hasSuffix("falseStatementCheckBox");
 }
 
-function isFullPageCaptcha(): boolean {
-  const url = location.href.toLowerCase();
-  return url.includes("rs-captcha") || (url.includes("/captcha") && !url.includes("submit.aspx"));
-}
-
 function captchaBlocking(includeSubmitWidget: boolean): boolean {
-  if (isFullPageCaptcha()) return true;
+  if (recaptchaSolved()) return false;
+  if (isCaptchaUrl()) return true;
   if (hasSuffix("falseStatementCheckBox") && !includeSubmitWidget) return false;
   if (isChallengeCaptcha()) return true;
   return !!(includeSubmitWidget && onSubmitFlow() && recaptchaNeedsUser());
@@ -71,28 +83,112 @@ export async function tickYesNow(): Promise<Record<string, unknown> | null> {
   }
 }
 
-export async function waitCaptcha(includeSubmitWidget = false): Promise<void> {
-  if (!captchaBlocking(includeSubmitWidget)) return;
+async function inPostback(): Promise<boolean> {
+  try {
+    const r = await callBridge("inPostback");
+    return !!r?.yes;
+  } catch {
+    return false;
+  }
+}
+
+async function pageLeft(beforeUrl: string): Promise<boolean> {
+  if (location.href !== beforeUrl) return true;
+  return inPostback();
+}
+
+async function clickAdvanceAfterCaptcha(preferSubmit: boolean, beforeUrl: string): Promise<Record<string, unknown> | null> {
+  const settleUntil = Date.now() + 400;
+  while (Date.now() < settleUntil) {
+    if (sessionStorage.getItem(RUN_KEY) !== "1") return null;
+    if (await pageLeft(beforeUrl)) return { ok: true, clicked: "NAV" };
+    await sleep(POLL_MS);
+  }
+  if (await pageLeft(beforeUrl)) return { ok: true, clicked: "NAV" };
+  try {
+    const r = await callBridge("clickAfterCaptcha", { preferSubmit });
+    if (r?.ok) return r;
+  } catch {
+    // button may still be disabled for a tick after the token appears
+  }
+  await sleep(200);
+  if (await pageLeft(beforeUrl)) return { ok: true, clicked: "NAV" };
+  try {
+    const again = await callBridge("clickAfterCaptcha", { preferSubmit });
+    if (again?.ok) return again;
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function waitUntilSolvedOrUnblocked(includeSubmitWidget: boolean): Promise<void> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      stop();
+      resolve();
+    };
+    let lastTick = 0;
+    const onTick = () => {
+      if (Date.now() - lastTick > 400) {
+        lastTick = Date.now();
+        void tickYesNow();
+      }
+      if (sessionStorage.getItem(RUN_KEY) !== "1" || recaptchaSolved() || !captchaBlocking(includeSubmitWidget)) {
+        finish();
+      }
+    };
+    const timer = window.setInterval(onTick, POLL_MS);
+    const observer = new MutationObserver(onTick);
+    observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true });
+    const onEvent = () => onTick();
+    document.addEventListener("input", onEvent, true);
+    document.addEventListener("change", onEvent, true);
+    const stop = () => {
+      clearInterval(timer);
+      observer.disconnect();
+      document.removeEventListener("input", onEvent, true);
+      document.removeEventListener("change", onEvent, true);
+    };
+    onTick();
+  });
+}
+
+export async function waitCaptcha(includeSubmitWidget = false, clickWhenSolved = true): Promise<boolean> {
+  if (!captchaBlocking(includeSubmitWidget)) return false;
   dumpCaptchaInfo();
   const started = Date.now();
+  const beforeUrl = location.href;
   addLog("CAPTCHA", includeSubmitWidget ? "Chờ reCAPTCHA trước SUBMIT" : "Chờ captcha (đã tick Yes nếu có)");
-  await withStuck(includeSubmitWidget ? "chờ reCAPTCHA SUBMIT" : "chờ captcha", async () => {
-    while (sessionStorage.getItem(RUN_KEY) === "1" && captchaBlocking(includeSubmitWidget)) {
-      await tickYesNow();
-      await sleep(400);
-    }
-  });
+  await withStuck(includeSubmitWidget ? "chờ reCAPTCHA SUBMIT" : "chờ captcha", () =>
+    waitUntilSolvedOrUnblocked(includeSubmitWidget),
+  );
+  if (sessionStorage.getItem(RUN_KEY) !== "1") return false;
+  if (!clickWhenSolved) {
+    addLog("CAPTCHA", "Xong captcha", Date.now() - started);
+    return false;
+  }
+  const advanced = await clickAdvanceAfterCaptcha(includeSubmitWidget, beforeUrl);
+  if (advanced?.ok && advanced.clicked !== "NAV") {
+    const label = String(advanced.clicked || "NEXT");
+    const id = advanced.id ? " #" + String(advanced.id).split("_").pop() : "";
+    addLog("CLICK", "Captcha xong — bấm " + label + id + " ngay");
+  }
   addLog("CAPTCHA", "Xong captcha", Date.now() - started);
+  return !!advanced?.ok;
 }
 
 export async function waitNav(beforeUrl: string, timeout = 20000): Promise<boolean> {
-  const { isHighLoad } = await import("./detect");
+  const { isAccessDenied, isHighLoad } = await import("./detect");
   return withStuck("chờ chuyển trang " + beforeUrl, async () => {
     const start = Date.now();
     while (Date.now() - start < timeout) {
       if (sessionStorage.getItem(RUN_KEY) !== "1") return false;
-      if (location.href !== beforeUrl || isChallengeCaptcha() || isHighLoad()) return true;
-      await sleep(120);
+      if (location.href !== beforeUrl || isChallengeCaptcha() || isHighLoad() || isAccessDenied()) return true;
+      await sleep(80);
     }
     return location.href !== beforeUrl;
   });

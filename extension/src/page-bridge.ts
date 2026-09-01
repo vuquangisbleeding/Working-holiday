@@ -1,4 +1,4 @@
-import { clickBy, clickCountry, clickNext, clickNextStep, clickPayNow, clickSave, clickSubmit, fillPayerName, findButton, hasNext, hasSubmit } from "./bridge/clicks";
+import { clickAfterCaptcha, clickBy, clickCountry, clickNext, clickNextStep, clickPayNow, clickSave, clickSubmit, fillPayerName, findButton, hasNext, hasSubmit } from "./bridge/clicks";
 import { bySuffix, fillMany, inPostback, setSelect } from "./bridge/dom";
 
 declare global {
@@ -78,6 +78,7 @@ function handle(op: string, payload: Record<string, unknown> | undefined): Recor
   if (op === "hasNext") return { ok: hasNext() };
   if (op === "hasSubmit") return { ok: hasSubmit() };
   if (op === "clickSubmit") return clickSubmit();
+  if (op === "clickAfterCaptcha") return clickAfterCaptcha(!!payload?.preferSubmit);
   if (op === "clickPayLater") {
     return clickBy([
       (el) => String(el.value || "").replace(/\s+/g, " ").trim().toUpperCase() === "PAY LATER",

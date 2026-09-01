@@ -24,6 +24,14 @@ const SUBMIT_PREDS: Pred[] = [
   (el) => String(el.textContent || "").trim().toUpperCase() === "SUBMIT",
 ];
 
+const CONTINUE_PREDS: Pred[] = [
+  (el) => /continueButton$/i.test(el.id || ""),
+  (el) => /continueImageButton$/i.test(el.id || ""),
+  (el) => String(el.value || "").trim().toUpperCase() === "CONTINUE",
+  (el) => String(el.textContent || "").replace(/\s+/g, " ").trim().toUpperCase() === "CONTINUE",
+  (el) => String(el.alt || el.title || "").trim().toUpperCase() === "CONTINUE",
+];
+
 export function findButton(preds: Pred[]): Record<string, unknown> | null {
   const nodes = Array.from(document.querySelectorAll("input, button, a")) as HTMLInputElement[];
   for (const pred of preds) {
@@ -67,9 +75,26 @@ export function hasSubmit(): boolean {
 }
 
 export function clickSubmit(): Record<string, unknown> {
+  if (document.documentElement.dataset.whsSubmitted === "1") {
+    return { ok: false, reason: "already-submitted" };
+  }
   const sub = clickBy(SUBMIT_PREDS);
+  if (sub.ok) document.documentElement.dataset.whsSubmitted = "1";
   if (sub.ok) return { ...sub, clicked: "SUBMIT" };
   return { ok: false, reason: "no-submit" };
+}
+
+export function clickAfterCaptcha(preferSubmit = false): Record<string, unknown> {
+  if (preferSubmit) return clickSubmit();
+  const groups: Array<{ preds: Pred[]; clicked: string }> = [
+    { preds: CONTINUE_PREDS, clicked: "CONTINUE" },
+    { preds: NEXT_PREDS, clicked: "NEXT" },
+  ];
+  for (const group of groups) {
+    const hit = clickBy(group.preds);
+    if (hit.ok) return { ...hit, clicked: group.clicked };
+  }
+  return { ok: false, reason: "no-advance" };
 }
 
 function normLabel(el: HTMLInputElement): string {

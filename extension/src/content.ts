@@ -37,7 +37,7 @@ async function loadApplicant(): Promise<{ applicant: Applicant; credentials: Cre
 
 async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
   await tickYesNow();
-  await waitCaptcha(false);
+  await waitCaptcha(false, false);
   if (await recoverHighLoad(stopRun)) return;
   const page = detectPage();
   setActivity(page + " | " + shortUrl(location.href), "nhận diện trang");
@@ -49,6 +49,14 @@ async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
   }
   if (page === "quota") {
     addLog("ERR", "Scheme đã hết chỗ / đóng");
+    stopRun();
+    return;
+  }
+  if (page === "denied") {
+    addLog(
+      "ERR",
+      "INZ Access denied — thường do SUBMIT/Next bị bấm 2 lần hoặc token trang đã dùng. Đừng F5. Đóng hết cửa sổ Chrome, login lại, mở Edit Incomplete.",
+    );
     stopRun();
     return;
   }
@@ -100,7 +108,9 @@ async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
     return;
   }
   if (page === "captcha") {
-    await waitCaptcha();
+    const clicked = await waitCaptcha();
+    if (sessionStorage.getItem(RUN_KEY) !== "1") return;
+    if (!clicked) await clickAndWait("clickNext");
     return;
   }
 
@@ -115,13 +125,13 @@ async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
   }
   if (action === "submit") {
     await tickYesNow();
-    await waitCaptcha(true);
+    const clicked = await waitCaptcha(true);
     if (detectPage() === "pay_now" || detectPage() === "pay") {
       await clickAndWait("clickPayNow");
       return;
     }
-    await clickAndWait("clickSubmit");
-    await sleep(400);
+    if (!clicked && detectPage() === "declaration") await clickAndWait("clickSubmit");
+    await sleep(200);
     if (detectPage() === "pay_now" || detectPage() === "pay") await clickAndWait("clickPayNow");
     return;
   }
@@ -171,7 +181,7 @@ async function runLoop(fresh?: boolean): Promise<void> {
     for (let i = 0; i < MAX_PAGES; i += 1) {
       if (sessionStorage.getItem(RUN_KEY) !== "1") break;
       await stepOnce(loaded.applicant, loaded.credentials || {});
-      await sleep(200);
+      await sleep(80);
     }
   } catch (err) {
     addLog("ERR", String(err instanceof Error ? err.message : err));
@@ -229,5 +239,5 @@ if (sessionStorage.getItem(RUN_KEY) === "1") {
   setStatus("Tiếp tục sau khi chuyển trang...");
   setTimeout(() => {
     void runLoop();
-  }, 400);
+  }, 100);
 }

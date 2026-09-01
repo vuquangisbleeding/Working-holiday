@@ -140,12 +140,23 @@ export async function pageText(driver: WebDriver): Promise<string> {
 
 export async function isHighLoad(driver: WebDriver): Promise<boolean> {
   const text = await pageText(driver);
-  return (
+  if (
     text.includes("site is under high load") ||
     text.includes("high demand on the system") ||
     text.includes("experiencing high demand") ||
     (text.includes("high load") && text.includes("try again later"))
-  );
+  ) {
+    return true;
+  }
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (!compact.includes("try again later")) return false;
+  const leftover = compact
+    .replace(/please try again later\.?/g, "")
+    .replace(/try again later\.?/g, "")
+    .replace(/new zealand immigration/g, "")
+    .replace(/immigration new zealand/g, "")
+    .trim();
+  return leftover.length < 160;
 }
 
 export async function isQuotaClosed(driver: WebDriver): Promise<boolean> {

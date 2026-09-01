@@ -102,6 +102,13 @@
     (el) => String(el.value || "").trim().toUpperCase() === "SUBMIT",
     (el) => String(el.textContent || "").trim().toUpperCase() === "SUBMIT"
   ];
+  var CONTINUE_PREDS = [
+    (el) => /continueButton$/i.test(el.id || ""),
+    (el) => /continueImageButton$/i.test(el.id || ""),
+    (el) => String(el.value || "").trim().toUpperCase() === "CONTINUE",
+    (el) => String(el.textContent || "").replace(/\s+/g, " ").trim().toUpperCase() === "CONTINUE",
+    (el) => String(el.alt || el.title || "").trim().toUpperCase() === "CONTINUE"
+  ];
   function findButton(preds) {
     const nodes = Array.from(document.querySelectorAll("input, button, a"));
     for (const pred of preds) {
@@ -139,9 +146,25 @@
     return findButton(SUBMIT_PREDS) !== null;
   }
   function clickSubmit() {
+    if (document.documentElement.dataset.whsSubmitted === "1") {
+      return { ok: false, reason: "already-submitted" };
+    }
     const sub = clickBy(SUBMIT_PREDS);
+    if (sub.ok) document.documentElement.dataset.whsSubmitted = "1";
     if (sub.ok) return { ...sub, clicked: "SUBMIT" };
     return { ok: false, reason: "no-submit" };
+  }
+  function clickAfterCaptcha(preferSubmit = false) {
+    if (preferSubmit) return clickSubmit();
+    const groups = [
+      { preds: CONTINUE_PREDS, clicked: "CONTINUE" },
+      { preds: NEXT_PREDS, clicked: "NEXT" }
+    ];
+    for (const group of groups) {
+      const hit = clickBy(group.preds);
+      if (hit.ok) return { ...hit, clicked: group.clicked };
+    }
+    return { ok: false, reason: "no-advance" };
   }
   function normLabel(el) {
     return [el.value, el.textContent, el.id, el.title, el.getAttribute("alt")].map((s) => String(s || "").replace(/\s+/g, " ").trim().toUpperCase()).join(" ");
@@ -272,6 +295,7 @@
     if (op === "hasNext") return { ok: hasNext() };
     if (op === "hasSubmit") return { ok: hasSubmit() };
     if (op === "clickSubmit") return clickSubmit();
+    if (op === "clickAfterCaptcha") return clickAfterCaptcha(!!payload?.preferSubmit);
     if (op === "clickPayLater") {
       return clickBy([
         (el) => String(el.value || "").replace(/\s+/g, " ").trim().toUpperCase() === "PAY LATER",

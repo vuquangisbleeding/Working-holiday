@@ -2,7 +2,7 @@ export const RUN_KEY = "whsAutoRun";
 export const LOG_KEY = "whsRunLog";
 export const T0_KEY = "whsRunT0";
 export const LAST_PAGE_KEY = "whsLastPage";
-export const MAX_PAGES = 20;
+export const MAX_PAGES = 40;
 
 export let panel: HTMLElement | undefined;
 

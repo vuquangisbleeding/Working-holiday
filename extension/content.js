@@ -47,7 +47,7 @@
       LOG_KEY = "whsRunLog";
       T0_KEY = "whsRunT0";
       LAST_PAGE_KEY = "whsLastPage";
-      MAX_PAGES = 20;
+      MAX_PAGES = 40;
       sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       activity = { page: "", action: "" };
     }
@@ -93,7 +93,7 @@
     rows.push(entry);
     sessionStorage.setItem(LOG_KEY, JSON.stringify(rows.slice(-250)));
     renderLog();
-    const cls = kind === "ERR" ? "err" : kind === "CAPTCHA" || kind === "HIGH_LOAD" || kind === "STUCK" ? "pause" : "";
+    const cls = kind === "ERR" ? "err" : kind === "CAPTCHA" || kind === "HIGH_LOAD" || kind === "TRY_AGAIN" || kind === "STUCK" ? "pause" : "";
     setStatus(kind + ": " + entry.text + (entry.dur ? " (" + entry.dur + ")" : ""), cls);
   }
   function resetLog() {
@@ -231,22 +231,44 @@
   var detect_exports = {};
   __export(detect_exports, {
     detectPage: () => detectPage,
+    isAccessDenied: () => isAccessDenied,
     isHighLoad: () => isHighLoad,
     isQuotaClosed: () => isQuotaClosed,
     recoverHighLoad: () => recoverHighLoad,
     startHighLoadWatch: () => startHighLoadWatch
   });
   function pageBlob() {
-    const root = document.documentElement;
-    return [
-      document.title || "",
-      document.body && (document.body.innerText || document.body.textContent) || "",
-      root && (root.innerText || root.textContent) || ""
-    ].join(" ").toLowerCase();
+    const parts = [document.title || ""];
+    const body = document.body;
+    if (body) {
+      for (const child of Array.from(body.childNodes)) {
+        if (child instanceof HTMLElement && child.id === "whs-panel") continue;
+        parts.push(child.innerText || child.textContent || "");
+      }
+    }
+    return parts.join(" ").toLowerCase();
+  }
+  function isTryAgainLater() {
+    const compact = pageBlob().replace(/\s+/g, " ").trim();
+    if (!compact.includes("try again later")) return false;
+    if (hasSuffix(
+      "familyNameTextBox",
+      "passportNumberTextBox",
+      "falseStatementCheckBox",
+      "previousWhsPermitVisaDropDownList"
+    )) {
+      return false;
+    }
+    const leftover = compact.replace(/please try again later\.?/g, "").replace(/try again later\.?/g, "").replace(/new zealand immigration/g, "").replace(/immigration new zealand/g, "").trim();
+    return leftover.length < 160;
   }
   function isHighLoad() {
     const text = pageBlob();
-    return text.includes("site is under high load") || text.includes("high demand on the system") || text.includes("experiencing high demand") || text.includes("high load") && text.includes("try again later");
+    return text.includes("site is under high load") || text.includes("high demand on the system") || text.includes("experiencing high demand") || text.includes("high load") && text.includes("try again later") || isTryAgainLater();
+  }
+  function isAccessDenied() {
+    const text = pageBlob();
+    return text.includes("access denied") && (text.includes("denied access to this page") || text.includes("session has timed-out") || text.includes("you don't have 'cookies' enabled") || text.includes("you don\u2019t have 'cookies' enabled"));
   }
   function isQuotaClosed() {
     const text = pageBlob();
@@ -291,6 +313,7 @@
     const url = location.href;
     const body = document.body && document.body.innerText || "";
     if (isHighLoad()) return "highload";
+    if (isAccessDenied()) return "denied";
     if (isQuotaClosed()) return "quota";
     if (url.includes("Personal1.aspx") || hasSuffix("familyNameTextBox")) return "personal1";
     if (url.includes("Personal2.aspx") || hasSuffix("passportNumberTextBox")) return "personal2";
@@ -305,7 +328,9 @@
       return "pay_now";
     }
     if (url.includes("Submit.aspx") || hasSuffix("falseStatementCheckBox")) return "declaration";
-    if (isChallengeCaptcha() && !hasSuffix("familyNameTextBox")) return "captcha";
+    if (isCaptchaUrl() && !recaptchaSolved() || isChallengeCaptcha() && !hasSuffix("familyNameTextBox")) {
+      return "captcha";
+    }
     if (url.includes("OnlinePayment.aspx") || url.includes("OnLinePayment.aspx")) return "pay_next";
     if (document.querySelector('[name="username"]') && document.querySelector('[name="password"]')) return "login";
     if (document.querySelector("a[id^='ContentPlaceHolder1_applicationList_applicationsDataGrid_editHyperLink_']")) {
@@ -330,13 +355,14 @@
     const n = Number(sessionStorage.getItem("whsHighLoadTries") || "0") + 1;
     sessionStorage.setItem("whsHighLoadTries", String(n));
     sessionStorage.setItem(HL_RELOAD_KEY, "1");
+    const kind = isTryAgainLater() ? "TRY_AGAIN" : "HIGH_LOAD";
     if (n > 1) {
       const inApp = /applicationid=/i.test(location.href);
       const wait = inApp ? Math.min(400 * n, 3e3) : Math.min(800 * n, 5e3);
-      addLog("HIGH_LOAD", "F5 sau " + (wait / 1e3).toFixed(1) + "s (l\u1EA7n " + n + ")");
+      addLog(kind, "F5 sau " + (wait / 1e3).toFixed(1) + "s (l\u1EA7n " + n + ")");
       await sleep(wait);
     } else {
-      addLog("HIGH_LOAD", "F5 ngay");
+      addLog(kind, isTryAgainLater() ? "Please try again later \u2014 F5 ngay" : "F5 ngay");
     }
     try {
       location.reload();
@@ -368,14 +394,26 @@
   });
 
   // extension/src/content/captcha.ts
-  function isChallengeCaptcha() {
+  function isCaptchaUrl() {
     const url = location.href.toLowerCase();
-    if (url.includes("rs-captcha") || url.includes("/captcha")) return true;
+    return url.includes("rs-captcha") || url.includes("/captcha") && !url.includes("submit.aspx");
+  }
+  function recaptchaSolved() {
+    const nodes = document.querySelectorAll(
+      "#g-recaptcha-response, textarea[name='g-recaptcha-response'], textarea.g-recaptcha-response, textarea[id*='g-recaptcha-response']"
+    );
+    for (const node of nodes) {
+      if (String(node.value || "").trim().length > TOKEN_MIN) return true;
+    }
+    return false;
+  }
+  function isChallengeCaptcha() {
+    if (isCaptchaUrl() && !recaptchaSolved()) return true;
     return Array.from(document.querySelectorAll("iframe")).some((f) => {
       const src = (f.src || "").toLowerCase();
       const title = (f.title || "").toLowerCase();
       const st = getComputedStyle(f);
-      if (st.display === "none" || !f.offsetParent) return false;
+      if (st.display === "none" || st.visibility === "hidden" || !f.offsetParent) return false;
       const challenge = src.includes("bframe") || src.includes("rs-captcha") || title.includes("challenge");
       return challenge && f.offsetWidth > 180 && f.offsetHeight > 180;
     });
@@ -404,18 +442,14 @@
   function recaptchaNeedsUser() {
     const widget = document.querySelector('.g-recaptcha, [data-sitekey], iframe[src*="recaptcha"]');
     if (!widget) return false;
-    const ta = document.querySelector("#g-recaptcha-response, textarea[name='g-recaptcha-response']");
-    return !(ta && String(ta.value || "").trim().length > 10);
+    return !recaptchaSolved();
   }
   function onSubmitFlow() {
     return location.href.toLowerCase().includes("submit.aspx") || hasSuffix("falseStatementCheckBox");
   }
-  function isFullPageCaptcha() {
-    const url = location.href.toLowerCase();
-    return url.includes("rs-captcha") || url.includes("/captcha") && !url.includes("submit.aspx");
-  }
   function captchaBlocking(includeSubmitWidget) {
-    if (isFullPageCaptcha()) return true;
+    if (recaptchaSolved()) return false;
+    if (isCaptchaUrl()) return true;
     if (hasSuffix("falseStatementCheckBox") && !includeSubmitWidget) return false;
     if (isChallengeCaptcha()) return true;
     return !!(includeSubmitWidget && onSubmitFlow() && recaptchaNeedsUser());
@@ -428,37 +462,119 @@
       return null;
     }
   }
-  async function waitCaptcha(includeSubmitWidget = false) {
-    if (!captchaBlocking(includeSubmitWidget)) return;
+  async function inPostback() {
+    try {
+      const r = await callBridge("inPostback");
+      return !!r?.yes;
+    } catch {
+      return false;
+    }
+  }
+  async function pageLeft(beforeUrl) {
+    if (location.href !== beforeUrl) return true;
+    return inPostback();
+  }
+  async function clickAdvanceAfterCaptcha(preferSubmit, beforeUrl) {
+    const settleUntil = Date.now() + 400;
+    while (Date.now() < settleUntil) {
+      if (sessionStorage.getItem(RUN_KEY) !== "1") return null;
+      if (await pageLeft(beforeUrl)) return { ok: true, clicked: "NAV" };
+      await sleep(POLL_MS);
+    }
+    if (await pageLeft(beforeUrl)) return { ok: true, clicked: "NAV" };
+    try {
+      const r = await callBridge("clickAfterCaptcha", { preferSubmit });
+      if (r?.ok) return r;
+    } catch {
+    }
+    await sleep(200);
+    if (await pageLeft(beforeUrl)) return { ok: true, clicked: "NAV" };
+    try {
+      const again = await callBridge("clickAfterCaptcha", { preferSubmit });
+      if (again?.ok) return again;
+    } catch {
+    }
+    return null;
+  }
+  function waitUntilSolvedOrUnblocked(includeSubmitWidget) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        stop();
+        resolve();
+      };
+      let lastTick = 0;
+      const onTick = () => {
+        if (Date.now() - lastTick > 400) {
+          lastTick = Date.now();
+          void tickYesNow();
+        }
+        if (sessionStorage.getItem(RUN_KEY) !== "1" || recaptchaSolved() || !captchaBlocking(includeSubmitWidget)) {
+          finish();
+        }
+      };
+      const timer = window.setInterval(onTick, POLL_MS);
+      const observer = new MutationObserver(onTick);
+      observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true });
+      const onEvent = () => onTick();
+      document.addEventListener("input", onEvent, true);
+      document.addEventListener("change", onEvent, true);
+      const stop = () => {
+        clearInterval(timer);
+        observer.disconnect();
+        document.removeEventListener("input", onEvent, true);
+        document.removeEventListener("change", onEvent, true);
+      };
+      onTick();
+    });
+  }
+  async function waitCaptcha(includeSubmitWidget = false, clickWhenSolved = true) {
+    if (!captchaBlocking(includeSubmitWidget)) return false;
     dumpCaptchaInfo();
     const started = Date.now();
+    const beforeUrl = location.href;
     addLog("CAPTCHA", includeSubmitWidget ? "Ch\u1EDD reCAPTCHA tr\u01B0\u1EDBc SUBMIT" : "Ch\u1EDD captcha (\u0111\xE3 tick Yes n\u1EBFu c\xF3)");
-    await withStuck(includeSubmitWidget ? "ch\u1EDD reCAPTCHA SUBMIT" : "ch\u1EDD captcha", async () => {
-      while (sessionStorage.getItem(RUN_KEY) === "1" && captchaBlocking(includeSubmitWidget)) {
-        await tickYesNow();
-        await sleep(400);
-      }
-    });
+    await withStuck(
+      includeSubmitWidget ? "ch\u1EDD reCAPTCHA SUBMIT" : "ch\u1EDD captcha",
+      () => waitUntilSolvedOrUnblocked(includeSubmitWidget)
+    );
+    if (sessionStorage.getItem(RUN_KEY) !== "1") return false;
+    if (!clickWhenSolved) {
+      addLog("CAPTCHA", "Xong captcha", Date.now() - started);
+      return false;
+    }
+    const advanced = await clickAdvanceAfterCaptcha(includeSubmitWidget, beforeUrl);
+    if (advanced?.ok && advanced.clicked !== "NAV") {
+      const label = String(advanced.clicked || "NEXT");
+      const id = advanced.id ? " #" + String(advanced.id).split("_").pop() : "";
+      addLog("CLICK", "Captcha xong \u2014 b\u1EA5m " + label + id + " ngay");
+    }
     addLog("CAPTCHA", "Xong captcha", Date.now() - started);
+    return !!advanced?.ok;
   }
   async function waitNav(beforeUrl, timeout = 2e4) {
-    const { isHighLoad: isHighLoad2 } = await Promise.resolve().then(() => (init_detect(), detect_exports));
+    const { isAccessDenied: isAccessDenied2, isHighLoad: isHighLoad2 } = await Promise.resolve().then(() => (init_detect(), detect_exports));
     return withStuck("ch\u1EDD chuy\u1EC3n trang " + beforeUrl, async () => {
       const start = Date.now();
       while (Date.now() - start < timeout) {
         if (sessionStorage.getItem(RUN_KEY) !== "1") return false;
-        if (location.href !== beforeUrl || isChallengeCaptcha() || isHighLoad2()) return true;
-        await sleep(120);
+        if (location.href !== beforeUrl || isChallengeCaptcha() || isHighLoad2() || isAccessDenied2()) return true;
+        await sleep(80);
       }
       return location.href !== beforeUrl;
     });
   }
+  var TOKEN_MIN, POLL_MS;
   var init_captcha = __esm({
     "extension/src/content/captcha.ts"() {
       "use strict";
       init_bridge();
       init_log();
       init_state();
+      TOKEN_MIN = 20;
+      POLL_MS = 50;
     }
   });
 
@@ -737,7 +853,8 @@
     addLog("CLICK", "Kh\xF4ng c\xF3 Next/SAVE tr\xEAn " + shortUrl(location.href) + " \u2014 b\u1EA5m SUBMIT");
     setActivity(shortUrl(location.href), "b\u1EA5m SUBMIT");
     await tickYesNow();
-    await waitCaptcha(true);
+    const clicked = await waitCaptcha(true);
+    if (clicked) return { ok: true, clicked: "SUBMIT" };
     const sub = await callBridge("clickSubmit");
     if (sub?.ok) addLog("CLICK", "\u0110\xE3 b\u1EA5m " + clickLabel(sub, "SUBMIT") + " tr\xEAn " + shortUrl(location.href));
     return sub;
@@ -790,7 +907,8 @@
       return r;
     }
     addLog("CLICK", "\u0110\xE3 b\u1EA5m " + clickLabel(r, label) + " tr\xEAn " + shortUrl(before));
-    await waitCaptcha();
+    const clickAgain = op !== "clickSubmit" && op !== "clickPayNow" && op !== "clickPayLater" && op !== "clickOk";
+    await waitCaptcha(false, clickAgain);
     await waitNav(before);
     finishPendingNav();
     return r;
@@ -823,7 +941,7 @@
   }
   async function stepOnce(data, creds) {
     await tickYesNow();
-    await waitCaptcha(false);
+    await waitCaptcha(false, false);
     if (await recoverHighLoad(stopRun)) return;
     const page = detectPage();
     setActivity(page + " | " + shortUrl(location.href), "nh\u1EADn di\u1EC7n trang");
@@ -835,6 +953,14 @@
     }
     if (page === "quota") {
       addLog("ERR", "Scheme \u0111\xE3 h\u1EBFt ch\u1ED7 / \u0111\xF3ng");
+      stopRun();
+      return;
+    }
+    if (page === "denied") {
+      addLog(
+        "ERR",
+        "INZ Access denied \u2014 th\u01B0\u1EDDng do SUBMIT/Next b\u1ECB b\u1EA5m 2 l\u1EA7n ho\u1EB7c token trang \u0111\xE3 d\xF9ng. \u0110\u1EEBng F5. \u0110\xF3ng h\u1EBFt c\u1EEDa s\u1ED5 Chrome, login l\u1EA1i, m\u1EDF Edit Incomplete."
+      );
       stopRun();
       return;
     }
@@ -886,7 +1012,9 @@
       return;
     }
     if (page === "captcha") {
-      await waitCaptcha();
+      const clicked = await waitCaptcha();
+      if (sessionStorage.getItem(RUN_KEY) !== "1") return;
+      if (!clicked) await clickAndWait("clickNext");
       return;
     }
     const fillStart = Date.now();
@@ -900,13 +1028,13 @@
     }
     if (action === "submit") {
       await tickYesNow();
-      await waitCaptcha(true);
+      const clicked = await waitCaptcha(true);
       if (detectPage() === "pay_now" || detectPage() === "pay") {
         await clickAndWait("clickPayNow");
         return;
       }
-      await clickAndWait("clickSubmit");
-      await sleep(400);
+      if (!clicked && detectPage() === "declaration") await clickAndWait("clickSubmit");
+      await sleep(200);
       if (detectPage() === "pay_now" || detectPage() === "pay") await clickAndWait("clickPayNow");
       return;
     }
@@ -955,7 +1083,7 @@
       for (let i = 0; i < MAX_PAGES; i += 1) {
         if (sessionStorage.getItem(RUN_KEY) !== "1") break;
         await stepOnce(loaded.applicant, loaded.credentials || {});
-        await sleep(200);
+        await sleep(80);
       }
     } catch (err) {
       addLog("ERR", String(err instanceof Error ? err.message : err));
@@ -1000,6 +1128,6 @@
     setStatus("Ti\u1EBFp t\u1EE5c sau khi chuy\u1EC3n trang...");
     setTimeout(() => {
       void runLoop();
-    }, 400);
+    }, 100);
   }
 })();

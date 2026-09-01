@@ -26,7 +26,8 @@ async function clickSubmitFallback(): Promise<Record<string, unknown> | undefine
   addLog("CLICK", "Không có Next/SAVE trên " + shortUrl(location.href) + " — bấm SUBMIT");
   setActivity(shortUrl(location.href), "bấm SUBMIT");
   await tickYesNow();
-  await waitCaptcha(true);
+  const clicked = await waitCaptcha(true);
+  if (clicked) return { ok: true, clicked: "SUBMIT" };
   const sub = await callBridge("clickSubmit");
   if (sub?.ok) addLog("CLICK", "Đã bấm " + clickLabel(sub, "SUBMIT") + " trên " + shortUrl(location.href));
   return sub;
@@ -85,7 +86,8 @@ export async function clickAndWait(op: string, payload?: unknown): Promise<Recor
     return r;
   }
   addLog("CLICK", "Đã bấm " + clickLabel(r, label) + " trên " + shortUrl(before));
-  await waitCaptcha();
+  const clickAgain = op !== "clickSubmit" && op !== "clickPayNow" && op !== "clickPayLater" && op !== "clickOk";
+  await waitCaptcha(false, clickAgain);
   await waitNav(before);
   finishPendingNav();
   return r;

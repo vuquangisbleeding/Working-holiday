@@ -60,7 +60,7 @@ export function addLog(kind: string, text: string, durMs?: number): void {
   rows.push(entry);
   sessionStorage.setItem(LOG_KEY, JSON.stringify(rows.slice(-250)));
   renderLog();
-  const cls = kind === "ERR" ? "err" : kind === "CAPTCHA" || kind === "HIGH_LOAD" || kind === "STUCK" ? "pause" : "";
+  const cls = kind === "ERR" ? "err" : kind === "CAPTCHA" || kind === "HIGH_LOAD" || kind === "TRY_AGAIN" || kind === "STUCK" ? "pause" : "";
   setStatus(kind + ": " + entry.text + (entry.dur ? " (" + entry.dur + ")" : ""), cls);
 }
 
