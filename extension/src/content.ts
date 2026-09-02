@@ -2,7 +2,7 @@ import { DEFAULT_APPLICANT } from "./default-data";
 import type { Applicant, Credentials } from "../../src/types";
 import { callBridge, injectBridge } from "./content/bridge";
 import { tickYesNow, waitCaptcha, waitNav } from "./content/captcha";
-import { detectPage, recoverHighLoad, startHighLoadWatch, findPaymentUrl, isPaystationHost, isHostedPayUrl } from "./content/detect";
+import { detectPage, recoverHighLoad, recoverSchemeGate, startHighLoadWatch, findPaymentUrl, isPaystationHost, isHostedPayUrl, markAwaitingSchemeGate, clearGateWaitFlag, hasApplyNow } from "./content/detect";
 import { fillPage } from "./content/fill";
 import { addLog, copyLog, renderLog, resetLog, withStuck, startClock, stopClock } from "./content/log";
 import { clickAndWait, finishPendingNav } from "./content/nav";
@@ -102,12 +102,17 @@ async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
   if (hasSuffix("falseStatementCheckBox")) await tickYesNow();
   await waitCaptcha(false, false);
   if (await recoverHighLoad(stopRun)) return;
+  if (await recoverSchemeGate(stopRun)) return;
   const page = detectPage();
   setActivity(page + " | " + shortUrl(location.href), "nhận diện trang");
   addLog("PAGE", page + " | " + shortUrl(location.href));
   sessionStorage.setItem(LAST_PAGE_KEY, page);
   if (page === "highload") {
     await recoverHighLoad(stopRun);
+    return;
+  }
+  if (page === "gate_wait") {
+    await recoverSchemeGate(stopRun);
     return;
   }
   if (page === "quota") {
@@ -144,10 +149,17 @@ async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
     return;
   }
   if (page === "existing") {
+    clearGateWaitFlag();
     await clickAndWait("clickEdit");
     return;
   }
   if (page === "apply") {
+    clearGateWaitFlag();
+    if (!hasApplyNow()) {
+      addLog("GATE", "Scheme is available — chờ APPLY NOW");
+      await sleep(400);
+      return;
+    }
     await clickAndWait("clickApplyNow");
     return;
   }
@@ -169,6 +181,7 @@ async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
       return;
     }
     markClicked("clickCountry");
+    markAwaitingSchemeGate();
     await sleep(200);
     await waitCaptcha();
     await waitNav(before);

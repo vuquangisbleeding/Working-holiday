@@ -2,10 +2,38 @@ import { DEFAULT_APPLICANT } from "./default-data";
 import type { TelegramSettings } from "../../src/types";
 import { applicantIdentityLines } from "../../src/telegram/identity";
 
+function schemeCountryInput(): HTMLInputElement {
+  return document.getElementById("schemeCountry") as HTMLInputElement;
+}
+
+function jsonArea(): HTMLTextAreaElement {
+  return document.getElementById("json") as HTMLTextAreaElement;
+}
+
+function syncSchemeIntoJson(country: string): void {
+  const json = jsonArea();
+  try {
+    const data = JSON.parse(json.value || "{}") as Record<string, unknown>;
+    data.scheme_country = country;
+    json.value = JSON.stringify(data, null, 2);
+  } catch {
+    // JSON đang lỗi — saveAll sẽ báo
+  }
+}
+
+function readSchemeFromJson(): string {
+  try {
+    const data = JSON.parse(jsonArea().value || "{}") as { scheme_country?: string };
+    return String(data.scheme_country || "").trim();
+  } catch {
+    return "";
+  }
+}
+
 async function load(): Promise<void> {
   const stored = await chrome.storage.local.get(["applicant", "credentials", "telegram"]);
   const data = stored.applicant || DEFAULT_APPLICANT;
-  const json = document.getElementById("json") as HTMLTextAreaElement;
+  const json = jsonArea();
   const username = document.getElementById("username") as HTMLInputElement;
   const password = document.getElementById("password") as HTMLInputElement;
   const tgEnabled = document.getElementById("tgEnabled") as HTMLInputElement;
@@ -13,6 +41,7 @@ async function load(): Promise<void> {
   const tgChat = document.getElementById("tgChat") as HTMLInputElement;
   const tg = (stored.telegram || {}) as TelegramSettings;
   json.value = JSON.stringify(data, null, 2);
+  schemeCountryInput().value = String(data.scheme_country || DEFAULT_APPLICANT.scheme_country || "");
   username.value = stored.credentials?.username || "";
   password.value = stored.credentials?.password || "";
   tgEnabled.checked = !!tg.enabled;
@@ -36,17 +65,22 @@ async function saveTelegram(): Promise<TelegramSettings> {
 async function saveAll(): Promise<void> {
   const msg = document.getElementById("msg") as HTMLElement;
   try {
-    const json = document.getElementById("json") as HTMLTextAreaElement;
     const username = document.getElementById("username") as HTMLInputElement;
     const password = document.getElementById("password") as HTMLInputElement;
-    const applicant = JSON.parse(json.value);
+    const country = schemeCountryInput().value.trim().toUpperCase() || readSchemeFromJson().toUpperCase();
+    if (country) {
+      schemeCountryInput().value = country;
+      syncSchemeIntoJson(country);
+    }
+    const applicant = JSON.parse(jsonArea().value);
+    if (country) applicant.scheme_country = country;
     const credentials = {
       username: username.value.trim(),
       password: password.value,
     };
     await saveTelegram();
     await chrome.storage.local.set({ applicant, credentials });
-    msg.textContent = "Đã lưu.";
+    msg.textContent = "Đã lưu." + (country ? " Scheme: " + country : "");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     msg.textContent = "JSON lỗi: " + message;
@@ -58,10 +92,17 @@ document.getElementById("save")?.addEventListener("click", () => {
 });
 
 document.getElementById("restore")?.addEventListener("click", () => {
-  const json = document.getElementById("json") as HTMLTextAreaElement;
   const msg = document.getElementById("msg") as HTMLElement;
-  json.value = JSON.stringify(DEFAULT_APPLICANT, null, 2);
+  jsonArea().value = JSON.stringify(DEFAULT_APPLICANT, null, 2);
+  schemeCountryInput().value = DEFAULT_APPLICANT.scheme_country;
   msg.textContent = "Đã đưa mặc định lên form. Bấm Lưu để ghi.";
+});
+
+schemeCountryInput().addEventListener("change", () => {
+  const country = schemeCountryInput().value.trim().toUpperCase();
+  if (!country) return;
+  schemeCountryInput().value = country;
+  syncSchemeIntoJson(country);
 });
 
 document.getElementById("tgChatId")?.addEventListener("click", async () => {

@@ -107,6 +107,55 @@ function buttonTextHit(needles: string[]): boolean {
   });
 }
 
+export function hasApplyNow(): boolean {
+  if (document.getElementById("ContentPlaceHolder1_applyNowButton")) return true;
+  return buttonTextHit(["APPLY NOW"]);
+}
+
+export function hasSchemeAvailable(): boolean {
+  return pageBlob().includes("scheme is available");
+}
+
+export function clearGateWaitFlag(): void {
+  sessionStorage.removeItem("whsAwaitGate");
+}
+
+export function markAwaitingSchemeGate(): void {
+  sessionStorage.setItem("whsAwaitGate", "1");
+}
+
+function hasExistingAppLink(): boolean {
+  return !!document.querySelector("a[id^='ContentPlaceHolder1_applicationList_applicationsDataGrid_editHyperLink_']");
+}
+
+function isCountrySchemeLanding(): boolean {
+  const path = pagePath();
+  const search = location.search.toLowerCase();
+  if (path.includes("create.aspx")) return true;
+  if (path.includes("/workingholiday/application/") && search.includes("countryid=")) return true;
+  return false;
+}
+
+/** Cổng chưa mở: đã vào nước nhưng chưa có Apply Now / Scheme is available. */
+export function isWaitingSchemeGate(): boolean {
+  if (hasApplyNow() || hasSchemeAvailable() || hasExistingAppLink()) return false;
+  if (
+    hasSuffix(
+      "familyNameTextBox",
+      "passportNumberTextBox",
+      "falseStatementCheckBox",
+      "previousWhsPermitVisaDropDownList",
+      "payerNameTextBox",
+    )
+  ) {
+    return false;
+  }
+  if (document.querySelector("[id^='ContentPlaceHolder1_countryRepeater_countryName_']")) return false;
+  if (isQuotaClosed()) return false;
+  if (isCountrySchemeLanding()) return true;
+  return sessionStorage.getItem("whsAwaitGate") === "1";
+}
+
 function hasPayerNameField(): boolean {
   if (document.querySelector("[id*='ayerName'], [id$='payerName'], [id*='PayerName']")) return true;
   return Array.from(document.querySelectorAll("label")).some((l) => /payer\s*name/i.test(l.textContent || ""));
@@ -184,10 +233,10 @@ export function detectPage(): string {
   if (isChallengeCaptcha() && !hasSuffix("familyNameTextBox")) return "captcha";
   if (path.includes("onlinepayment.aspx")) return "pay_next";
   if (document.querySelector('[name="username"]') && document.querySelector('[name="password"]')) return "login";
-  if (document.querySelector("a[id^='ContentPlaceHolder1_applicationList_applicationsDataGrid_editHyperLink_']")) {
-    return "existing";
-  }
-  if (document.getElementById("ContentPlaceHolder1_applyNowButton")) return "apply";
+  if (hasExistingAppLink()) return "existing";
+  if (hasApplyNow()) return "apply";
+  if (hasSchemeAvailable() && isCountrySchemeLanding()) return "apply";
+  if (isWaitingSchemeGate()) return "gate_wait";
   if (document.querySelector("[id^='ContentPlaceHolder1_countryRepeater_countryName_']")) return "country";
   return "unknown";
 }
@@ -236,17 +285,61 @@ export async function recoverHighLoad(stopRun: () => void): Promise<boolean> {
   return true;
 }
 
+const GATE_RELOAD_KEY = "whsGateReloading";
+const GATE_LAST_AT_KEY = "whsGateLastAt";
+const GATE_MIN_GAP_MS = 1500;
+
+export async function recoverSchemeGate(stopRun: () => void): Promise<boolean> {
+  if (!isWaitingSchemeGate()) {
+    if (hasApplyNow() || hasSchemeAvailable() || hasExistingAppLink()) clearGateWaitFlag();
+    sessionStorage.removeItem(GATE_RELOAD_KEY);
+    sessionStorage.removeItem("whsGateTries");
+    return false;
+  }
+  if (isQuotaClosed()) {
+    setStatus("Scheme đã hết chỗ / đóng. Incomplete không giữ slot.", "err");
+    stopRun();
+    return true;
+  }
+  if (wasAnyClickRecently(3000)) return false;
+  if (sessionStorage.getItem(GATE_RELOAD_KEY) === "1") return true;
+  const n = Number(sessionStorage.getItem("whsGateTries") || "0") + 1;
+  sessionStorage.setItem("whsGateTries", String(n));
+  sessionStorage.setItem(GATE_RELOAD_KEY, "1");
+  const lastAt = Number(sessionStorage.getItem(GATE_LAST_AT_KEY) || "0");
+  const since = Date.now() - lastAt;
+  const backoff = n === 1 ? 600 : Math.min(800 * n, 4000);
+  const wait = Math.max(backoff, lastAt ? Math.max(0, GATE_MIN_GAP_MS - since) : backoff);
+  addLog("GATE", "Cổng chưa mở — F5 sau " + (wait / 1000).toFixed(1) + "s (lần " + n + ")");
+  if (wait > 0) await sleep(wait);
+  sessionStorage.setItem(GATE_LAST_AT_KEY, String(Date.now()));
+  try {
+    location.reload();
+  } catch {
+    location.replace(location.href);
+  }
+  return true;
+}
+
 let highLoadWatch: number | undefined;
 
 export function startHighLoadWatch(stopRun: () => void): void {
   if (highLoadWatch) return;
   sessionStorage.removeItem(HL_RELOAD_KEY);
+  sessionStorage.removeItem(GATE_RELOAD_KEY);
   highLoadWatch = window.setInterval(() => {
     if (sessionStorage.getItem(RUN_KEY) !== "1") return;
-    if (!isHighLoad()) {
-      if (!pageLooksEmpty()) sessionStorage.removeItem(HL_RELOAD_KEY);
+    if (isHighLoad()) {
+      void recoverHighLoad(stopRun);
       return;
     }
-    void recoverHighLoad(stopRun);
+    if (isWaitingSchemeGate()) {
+      void recoverSchemeGate(stopRun);
+      return;
+    }
+    if (!pageLooksEmpty()) {
+      sessionStorage.removeItem(HL_RELOAD_KEY);
+      sessionStorage.removeItem(GATE_RELOAD_KEY);
+    }
   }, 300);
 }

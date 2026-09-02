@@ -238,7 +238,7 @@
     rows.push(entry);
     sessionStorage.setItem(LOG_KEY, JSON.stringify(rows.slice(-250)));
     renderLog();
-    const cls = kind === "ERR" ? "err" : kind === "CAPTCHA" || kind === "HIGH_LOAD" || kind === "TRY_AGAIN" || kind === "STUCK" ? "pause" : "";
+    const cls = kind === "ERR" ? "err" : kind === "CAPTCHA" || kind === "HIGH_LOAD" || kind === "TRY_AGAIN" || kind === "GATE" || kind === "STUCK" ? "pause" : "";
     setStatus(kind + ": " + entry.text + (entry.dur ? " (" + entry.dur + ")" : ""), cls);
   }
   function resetLog() {
@@ -378,14 +378,20 @@
   // extension/src/content/detect.ts
   var detect_exports = {};
   __export(detect_exports, {
+    clearGateWaitFlag: () => clearGateWaitFlag,
     detectPage: () => detectPage,
     findPaymentUrl: () => findPaymentUrl,
+    hasApplyNow: () => hasApplyNow,
+    hasSchemeAvailable: () => hasSchemeAvailable,
     isAccessDenied: () => isAccessDenied,
     isHighLoad: () => isHighLoad,
     isHostedPayUrl: () => isHostedPayUrl,
     isPaystationHost: () => isPaystationHost,
     isQuotaClosed: () => isQuotaClosed,
+    isWaitingSchemeGate: () => isWaitingSchemeGate,
+    markAwaitingSchemeGate: () => markAwaitingSchemeGate,
     recoverHighLoad: () => recoverHighLoad,
+    recoverSchemeGate: () => recoverSchemeGate,
     startHighLoadWatch: () => startHighLoadWatch
   });
   function pagePath() {
@@ -455,6 +461,45 @@
       return needles.some((n) => blob.includes(n));
     });
   }
+  function hasApplyNow() {
+    if (document.getElementById("ContentPlaceHolder1_applyNowButton")) return true;
+    return buttonTextHit(["APPLY NOW"]);
+  }
+  function hasSchemeAvailable() {
+    return pageBlob().includes("scheme is available");
+  }
+  function clearGateWaitFlag() {
+    sessionStorage.removeItem("whsAwaitGate");
+  }
+  function markAwaitingSchemeGate() {
+    sessionStorage.setItem("whsAwaitGate", "1");
+  }
+  function hasExistingAppLink() {
+    return !!document.querySelector("a[id^='ContentPlaceHolder1_applicationList_applicationsDataGrid_editHyperLink_']");
+  }
+  function isCountrySchemeLanding() {
+    const path = pagePath();
+    const search = location.search.toLowerCase();
+    if (path.includes("create.aspx")) return true;
+    if (path.includes("/workingholiday/application/") && search.includes("countryid=")) return true;
+    return false;
+  }
+  function isWaitingSchemeGate() {
+    if (hasApplyNow() || hasSchemeAvailable() || hasExistingAppLink()) return false;
+    if (hasSuffix(
+      "familyNameTextBox",
+      "passportNumberTextBox",
+      "falseStatementCheckBox",
+      "previousWhsPermitVisaDropDownList",
+      "payerNameTextBox"
+    )) {
+      return false;
+    }
+    if (document.querySelector("[id^='ContentPlaceHolder1_countryRepeater_countryName_']")) return false;
+    if (isQuotaClosed()) return false;
+    if (isCountrySchemeLanding()) return true;
+    return sessionStorage.getItem("whsAwaitGate") === "1";
+  }
   function hasPayerNameField() {
     if (document.querySelector("[id*='ayerName'], [id$='payerName'], [id*='PayerName']")) return true;
     return Array.from(document.querySelectorAll("label")).some((l) => /payer\s*name/i.test(l.textContent || ""));
@@ -517,10 +562,10 @@
     if (isChallengeCaptcha() && !hasSuffix("familyNameTextBox")) return "captcha";
     if (path.includes("onlinepayment.aspx")) return "pay_next";
     if (document.querySelector('[name="username"]') && document.querySelector('[name="password"]')) return "login";
-    if (document.querySelector("a[id^='ContentPlaceHolder1_applicationList_applicationsDataGrid_editHyperLink_']")) {
-      return "existing";
-    }
-    if (document.getElementById("ContentPlaceHolder1_applyNowButton")) return "apply";
+    if (hasExistingAppLink()) return "existing";
+    if (hasApplyNow()) return "apply";
+    if (hasSchemeAvailable() && isCountrySchemeLanding()) return "apply";
+    if (isWaitingSchemeGate()) return "gate_wait";
     if (document.querySelector("[id^='ContentPlaceHolder1_countryRepeater_countryName_']")) return "country";
     return "unknown";
   }
@@ -563,19 +608,58 @@
     }
     return true;
   }
+  async function recoverSchemeGate(stopRun2) {
+    if (!isWaitingSchemeGate()) {
+      if (hasApplyNow() || hasSchemeAvailable() || hasExistingAppLink()) clearGateWaitFlag();
+      sessionStorage.removeItem(GATE_RELOAD_KEY);
+      sessionStorage.removeItem("whsGateTries");
+      return false;
+    }
+    if (isQuotaClosed()) {
+      setStatus("Scheme \u0111\xE3 h\u1EBFt ch\u1ED7 / \u0111\xF3ng. Incomplete kh\xF4ng gi\u1EEF slot.", "err");
+      stopRun2();
+      return true;
+    }
+    if (wasAnyClickRecently(3e3)) return false;
+    if (sessionStorage.getItem(GATE_RELOAD_KEY) === "1") return true;
+    const n = Number(sessionStorage.getItem("whsGateTries") || "0") + 1;
+    sessionStorage.setItem("whsGateTries", String(n));
+    sessionStorage.setItem(GATE_RELOAD_KEY, "1");
+    const lastAt = Number(sessionStorage.getItem(GATE_LAST_AT_KEY) || "0");
+    const since = Date.now() - lastAt;
+    const backoff = n === 1 ? 600 : Math.min(800 * n, 4e3);
+    const wait = Math.max(backoff, lastAt ? Math.max(0, GATE_MIN_GAP_MS - since) : backoff);
+    addLog("GATE", "C\u1ED5ng ch\u01B0a m\u1EDF \u2014 F5 sau " + (wait / 1e3).toFixed(1) + "s (l\u1EA7n " + n + ")");
+    if (wait > 0) await sleep(wait);
+    sessionStorage.setItem(GATE_LAST_AT_KEY, String(Date.now()));
+    try {
+      location.reload();
+    } catch {
+      location.replace(location.href);
+    }
+    return true;
+  }
   function startHighLoadWatch(stopRun2) {
     if (highLoadWatch) return;
     sessionStorage.removeItem(HL_RELOAD_KEY);
+    sessionStorage.removeItem(GATE_RELOAD_KEY);
     highLoadWatch = window.setInterval(() => {
       if (sessionStorage.getItem(RUN_KEY) !== "1") return;
-      if (!isHighLoad()) {
-        if (!pageLooksEmpty()) sessionStorage.removeItem(HL_RELOAD_KEY);
+      if (isHighLoad()) {
+        void recoverHighLoad(stopRun2);
         return;
       }
-      void recoverHighLoad(stopRun2);
+      if (isWaitingSchemeGate()) {
+        void recoverSchemeGate(stopRun2);
+        return;
+      }
+      if (!pageLooksEmpty()) {
+        sessionStorage.removeItem(HL_RELOAD_KEY);
+        sessionStorage.removeItem(GATE_RELOAD_KEY);
+      }
     }, 300);
   }
-  var HL_RELOAD_KEY, HL_MIN_GAP_MS, highLoadWatch;
+  var HL_RELOAD_KEY, HL_MIN_GAP_MS, GATE_RELOAD_KEY, GATE_LAST_AT_KEY, GATE_MIN_GAP_MS, highLoadWatch;
   var init_detect = __esm({
     "extension/src/content/detect.ts"() {
       "use strict";
@@ -584,6 +668,9 @@
       init_state();
       HL_RELOAD_KEY = "whsHlReloading";
       HL_MIN_GAP_MS = 1500;
+      GATE_RELOAD_KEY = "whsGateReloading";
+      GATE_LAST_AT_KEY = "whsGateLastAt";
+      GATE_MIN_GAP_MS = 1500;
     }
   });
 
@@ -1262,12 +1349,17 @@
     if (hasSuffix("falseStatementCheckBox")) await tickYesNow();
     await waitCaptcha(false, false);
     if (await recoverHighLoad(stopRun)) return;
+    if (await recoverSchemeGate(stopRun)) return;
     const page = detectPage();
     setActivity(page + " | " + shortUrl(location.href), "nh\u1EADn di\u1EC7n trang");
     addLog("PAGE", page + " | " + shortUrl(location.href));
     sessionStorage.setItem(LAST_PAGE_KEY, page);
     if (page === "highload") {
       await recoverHighLoad(stopRun);
+      return;
+    }
+    if (page === "gate_wait") {
+      await recoverSchemeGate(stopRun);
       return;
     }
     if (page === "quota") {
@@ -1304,10 +1396,17 @@
       return;
     }
     if (page === "existing") {
+      clearGateWaitFlag();
       await clickAndWait("clickEdit");
       return;
     }
     if (page === "apply") {
+      clearGateWaitFlag();
+      if (!hasApplyNow()) {
+        addLog("GATE", "Scheme is available \u2014 ch\u1EDD APPLY NOW");
+        await sleep(400);
+        return;
+      }
       await clickAndWait("clickApplyNow");
       return;
     }
@@ -1329,6 +1428,7 @@
         return;
       }
       markClicked("clickCountry");
+      markAwaitingSchemeGate();
       await sleep(200);
       await waitCaptcha();
       await waitNav(before);

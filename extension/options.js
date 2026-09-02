@@ -91,10 +91,33 @@
   }
 
   // extension/src/options.ts
+  function schemeCountryInput() {
+    return document.getElementById("schemeCountry");
+  }
+  function jsonArea() {
+    return document.getElementById("json");
+  }
+  function syncSchemeIntoJson(country) {
+    const json = jsonArea();
+    try {
+      const data = JSON.parse(json.value || "{}");
+      data.scheme_country = country;
+      json.value = JSON.stringify(data, null, 2);
+    } catch {
+    }
+  }
+  function readSchemeFromJson() {
+    try {
+      const data = JSON.parse(jsonArea().value || "{}");
+      return String(data.scheme_country || "").trim();
+    } catch {
+      return "";
+    }
+  }
   async function load() {
     const stored = await chrome.storage.local.get(["applicant", "credentials", "telegram"]);
     const data = stored.applicant || DEFAULT_APPLICANT;
-    const json = document.getElementById("json");
+    const json = jsonArea();
     const username = document.getElementById("username");
     const password = document.getElementById("password");
     const tgEnabled = document.getElementById("tgEnabled");
@@ -102,6 +125,7 @@
     const tgChat = document.getElementById("tgChat");
     const tg = stored.telegram || {};
     json.value = JSON.stringify(data, null, 2);
+    schemeCountryInput().value = String(data.scheme_country || DEFAULT_APPLICANT.scheme_country || "");
     username.value = stored.credentials?.username || "";
     password.value = stored.credentials?.password || "";
     tgEnabled.checked = !!tg.enabled;
@@ -123,17 +147,22 @@
   async function saveAll() {
     const msg = document.getElementById("msg");
     try {
-      const json = document.getElementById("json");
       const username = document.getElementById("username");
       const password = document.getElementById("password");
-      const applicant = JSON.parse(json.value);
+      const country = schemeCountryInput().value.trim().toUpperCase() || readSchemeFromJson().toUpperCase();
+      if (country) {
+        schemeCountryInput().value = country;
+        syncSchemeIntoJson(country);
+      }
+      const applicant = JSON.parse(jsonArea().value);
+      if (country) applicant.scheme_country = country;
       const credentials = {
         username: username.value.trim(),
         password: password.value
       };
       await saveTelegram();
       await chrome.storage.local.set({ applicant, credentials });
-      msg.textContent = "\u0110\xE3 l\u01B0u.";
+      msg.textContent = "\u0110\xE3 l\u01B0u." + (country ? " Scheme: " + country : "");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       msg.textContent = "JSON l\u1ED7i: " + message;
@@ -143,10 +172,16 @@
     void saveAll();
   });
   document.getElementById("restore")?.addEventListener("click", () => {
-    const json = document.getElementById("json");
     const msg = document.getElementById("msg");
-    json.value = JSON.stringify(DEFAULT_APPLICANT, null, 2);
+    jsonArea().value = JSON.stringify(DEFAULT_APPLICANT, null, 2);
+    schemeCountryInput().value = DEFAULT_APPLICANT.scheme_country;
     msg.textContent = "\u0110\xE3 \u0111\u01B0a m\u1EB7c \u0111\u1ECBnh l\xEAn form. B\u1EA5m L\u01B0u \u0111\u1EC3 ghi.";
+  });
+  schemeCountryInput().addEventListener("change", () => {
+    const country = schemeCountryInput().value.trim().toUpperCase();
+    if (!country) return;
+    schemeCountryInput().value = country;
+    syncSchemeIntoJson(country);
   });
   document.getElementById("tgChatId")?.addEventListener("click", async () => {
     const msg = document.getElementById("msg");
