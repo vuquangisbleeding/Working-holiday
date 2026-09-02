@@ -171,11 +171,15 @@ export function fillPayerName(value: string): Record<string, unknown> {
 }
 
 export function clickCountry(name: string): Record<string, unknown> {
+  const want = name.trim().toUpperCase();
   const spans = Array.from(document.querySelectorAll("[id^='ContentPlaceHolder1_countryRepeater_countryName_']"));
-  const span = spans.find((s) => s.textContent?.trim() === name);
+  const span = spans.find((s) => (s.textContent || "").trim().toUpperCase() === want);
   if (!span) return { ok: false };
-  const footer = span.closest(".category-item-footer") || span.parentElement;
-  if (footer) (footer as HTMLElement).click();
+  const link =
+    span.closest("a[href*='Create.aspx']") ||
+    span.closest("[class*='category-item-footer']") ||
+    span.parentElement;
+  if (link) (link as HTMLElement).click();
   else (span as HTMLElement).click();
   return { ok: true };
 }

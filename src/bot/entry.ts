@@ -90,7 +90,7 @@ export async function continueToApplication(driver: WebDriver): Promise<void> {
     return;
   }
   if ((await driver.findElements(By.css(COUNTRY_NAME_CSS))).length) {
-    await selectCountry(driver, applicant().scheme_country ?? "JAPAN");
+    await selectCountry(driver, applicant().scheme_country ?? "CROATIA");
     await clickApplyNow(driver);
     await goToPersonal1(driver);
     return;

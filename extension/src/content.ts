@@ -152,7 +152,7 @@ async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
     return;
   }
   if (page === "country") {
-    const country = data.scheme_country || "JAPAN";
+    const country = data.scheme_country || "CROATIA";
     const before = location.href;
     if (wasClickedRecently("clickCountry")) {
       await waitNav(before);

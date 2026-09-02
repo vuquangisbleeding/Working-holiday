@@ -1,7 +1,7 @@
 import type { Applicant } from "../../src/types";
 
 export const DEFAULT_APPLICANT: Applicant = {
-  scheme_country: "JAPAN",
+  scheme_country: "CROATIA",
   personal: {
     country_of_birth: "Vietnam",
     date_of_birth: "2 December, 2000",

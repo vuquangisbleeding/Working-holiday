@@ -789,7 +789,7 @@
 
   // extension/src/default-data.ts
   var DEFAULT_APPLICANT = {
-    scheme_country: "JAPAN",
+    scheme_country: "CROATIA",
     personal: {
       country_of_birth: "Vietnam",
       date_of_birth: "2 December, 2000",
@@ -1312,7 +1312,7 @@
       return;
     }
     if (page === "country") {
-      const country = data.scheme_country || "JAPAN";
+      const country = data.scheme_country || "CROATIA";
       const before = location.href;
       if (wasClickedRecently("clickCountry")) {
         await waitNav(before);
