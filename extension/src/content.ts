@@ -7,7 +7,7 @@ import { fillPage } from "./content/fill";
 import { addLog, copyLog, renderLog, resetLog, withStuck, startClock, stopClock } from "./content/log";
 import { clickAndWait, finishPendingNav } from "./content/nav";
 import { LAST_PAGE_KEY, MAX_PAGES, panel, RUN_KEY, setActivity, setPanel, setStatus, shortUrl, sleep, T0_KEY, wasClickedRecently, markClicked, timingSummary, hasSuffix, persistTiming, timingFromPersisted } from "./content/state";
-import { notifyTelegram } from "./content/telegram";
+import { notifyTelegram, notifyTelegramLog } from "./content/telegram";
 
 let running = false;
 
@@ -223,6 +223,7 @@ async function stepOnce(data: Applicant, creds: Credentials): Promise<void> {
     return;
   }
   if (action === "pay_next") {
+    await notifyTelegramLog();
     await clickAndWait("clickNextStep");
     return;
   }

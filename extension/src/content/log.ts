@@ -100,14 +100,18 @@ export function resetLog(): void {
 }
 
 export function copyLog(): void {
-  const lines = loadLog().map(logLine);
-  if (sessionStorage.getItem(T0_KEY)) lines.push(timingSummary());
-  const text = lines.join("\n");
+  const text = logText();
   if (!text) return;
   navigator.clipboard.writeText(text).then(
     () => setStatus("Đã copy log.", "ok"),
     () => setStatus("Copy thất bại.", "err"),
   );
+}
+
+export function logText(): string {
+  const lines = loadLog().map(logLine);
+  if (sessionStorage.getItem(T0_KEY)) lines.push(timingSummary());
+  return lines.join("\n");
 }
 
 export function watchStuck(label: string): () => void {

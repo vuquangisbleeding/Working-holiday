@@ -173,6 +173,7 @@ export function resetTiming(): void {
       whsPayLogged: false,
       whsRunActive: true,
       whsTelegramSent: false,
+      whsLogSent: false,
       whsCaptchaTotal: 0,
       whsCaptchaCount: 0,
       whsCaptchaWait: 0,

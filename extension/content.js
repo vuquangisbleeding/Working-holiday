@@ -135,6 +135,7 @@
         whsPayLogged: false,
         whsRunActive: true,
         whsTelegramSent: false,
+        whsLogSent: false,
         whsCaptchaTotal: 0,
         whsCaptchaCount: 0,
         whsCaptchaWait: 0,
@@ -248,14 +249,17 @@
     renderLog();
   }
   function copyLog() {
-    const lines = loadLog().map(logLine);
-    if (sessionStorage.getItem(T0_KEY)) lines.push(timingSummary());
-    const text = lines.join("\n");
+    const text = logText();
     if (!text) return;
     navigator.clipboard.writeText(text).then(
       () => setStatus("\u0110\xE3 copy log.", "ok"),
       () => setStatus("Copy th\u1EA5t b\u1EA1i.", "err")
     );
+  }
+  function logText() {
+    const lines = loadLog().map(logLine);
+    if (sessionStorage.getItem(T0_KEY)) lines.push(timingSummary());
+    return lines.join("\n");
   }
   function watchStuck(label) {
     const started = Date.now();
@@ -1235,29 +1239,53 @@
 
   // extension/src/content/telegram.ts
   init_log();
+  async function sendTelegram(text) {
+    const result = await chrome.runtime.sendMessage({ type: "TELEGRAM", text });
+    if (result?.ok) return true;
+    addLog("TELEGRAM", "Kh\xF4ng g\u1EEDi \u0111\u01B0\u1EE3c: " + (result?.error || "kh\xF4ng r\xF5"));
+    return false;
+  }
+  function hasTelegramConfig(tg) {
+    if (!tg?.enabled) return false;
+    if (tg.botToken && tg.chatId) return true;
+    addLog("TELEGRAM", "Thi\u1EBFu bot token ho\u1EB7c Chat ID trong Options");
+    return false;
+  }
+  async function notifyTelegramLog() {
+    try {
+      const stored = await chrome.storage.local.get(["telegram", "whsLogSent", "applicant"]);
+      if (stored.whsLogSent || !hasTelegramConfig(stored.telegram)) return;
+      const header = [
+        "NZ WHS log tr\u01B0\u1EDBc payment",
+        ...applicantIdentityLines(stored.applicant)
+      ].filter(Boolean).join("\n");
+      const fullLog = logText();
+      const maxLogLength = Math.max(0, 3900 - header.length - 2);
+      const text = header + "\n" + (fullLog.length > maxLogLength ? "...\n" + fullLog.slice(-maxLogLength + 4) : fullLog);
+      if (await sendTelegram(text)) {
+        await chrome.storage.local.set({ whsLogSent: true });
+        addLog("TELEGRAM", "\u0110\xE3 g\u1EEDi log tr\u01B0\u1EDBc payment");
+      }
+    } catch (err) {
+      addLog("TELEGRAM", String(err instanceof Error ? err.message : err));
+    }
+  }
   async function notifyTelegram(payUrl, timing) {
     try {
       const stored = await chrome.storage.local.get(["telegram", "whsTelegramSent", "applicant"]);
       const tg = stored.telegram;
       if (stored.whsTelegramSent) return;
-      if (!tg?.enabled) return;
-      if (!tg.botToken || !tg.chatId) {
-        addLog("TELEGRAM", "Thi\u1EBFu bot token ho\u1EB7c Chat ID trong Options");
-        return;
-      }
+      if (!hasTelegramConfig(tg)) return;
       const text = [
         "NZ WHS xong",
         ...applicantIdentityLines(stored.applicant),
         timing,
         payUrl || "(ch\u01B0a c\xF3 link Paystation)"
       ].filter(Boolean).join("\n");
-      const result = await chrome.runtime.sendMessage({ type: "TELEGRAM", text });
-      if (result?.ok) {
+      if (await sendTelegram(text)) {
         await chrome.storage.local.set({ whsTelegramSent: true });
         addLog("TELEGRAM", "\u0110\xE3 g\u1EEDi Telegram");
-        return;
       }
-      addLog("TELEGRAM", "Kh\xF4ng g\u1EEDi \u0111\u01B0\u1EE3c: " + (result?.error || "kh\xF4ng r\xF5"));
     } catch (err) {
       addLog("TELEGRAM", String(err instanceof Error ? err.message : err));
     }
@@ -1469,6 +1497,7 @@
       return;
     }
     if (action === "pay_next") {
+      await notifyTelegramLog();
       await clickAndWait("clickNextStep");
       return;
     }
